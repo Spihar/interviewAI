@@ -1,6 +1,8 @@
 import fastapi
 from services.llmcalling import llmcalling
 from services.pdfreading import extract_text_pymupdf
+import os
+
 
 app = fastapi.FastAPI()
 
@@ -8,7 +10,11 @@ app = fastapi.FastAPI()
 def read_root():
     return {"Hello": "World"}
 
-@app.post("/interview")
-def start_interview(file_path: str):
-    extracted_text = extract_text_pymupdf(file_path)
-    return {"extracted_text": extracted_text}
+@app.post("/upload_resume")
+async def upload_resume(file: fastapi.UploadFile = fastapi.File(...)):
+    file_location = f"temp/{file.filename}"
+    with open(file_location, "wb") as f:
+        f.write(await file.read())
+    text = extract_text_pymupdf(file_location)
+    os.remove(file_location)  # Clean up the temporary file
+    return {"extracted_text": text}

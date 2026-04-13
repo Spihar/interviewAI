@@ -3,11 +3,10 @@ from services.llmcalling import llmcalling
 from services.pdfreading import extract_text_pymupdf
 from pydantic import BaseModel # For defining data models for request and response bodies in FastAPI.
 import os
+from fastapi.middleware.cors import CORSMiddleware
 
 
 app = fastapi.FastAPI()
-
-from fastapi.middleware.cors import CORSMiddleware
 
 app.add_middleware(
     CORSMiddleware,

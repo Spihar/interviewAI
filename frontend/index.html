@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>InterviewAI</title>
+</head>
+<body>
+    <h1>Welcome to InterviewAI</h1>
+    <p>This is a simple interface for our AI-powered interview platform.</p>
+    <h3>Upload your resume:</h3>
+    <input type="file" id="resumeFile"> <button type="button" onclick="uploadResume()">Upload</button>
+    <h3>Extracted Text:</h3> 
+    <textarea id="context" rows="10" cols="80"></textarea>
+    <h3>chat</h3>
+    <textarea id="history" rows="5" cols="80" placeholder="Conversation history"></textarea><br><br> 
+    <button onclick="askAI()">Ask AI</button>
+    <h3>Response:</h3> 
+    <p id="response"></p>
+    <script src="script.js"></script>
+</body>
+</html>

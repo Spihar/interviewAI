@@ -2,7 +2,7 @@ from google import genai
 def llmcalling(context,user,history):
     
     # The client gets the API key from the environment variable `GEMINI_API_KEY`.
-    client = genai.Client(api_key="AIzaSyDN0mLUk_pe4y9FH79OveFJeJNY1yQOhY8")
+    client = genai.Client(api_key="")
 
     response = client.models.generate_content(
         model="gemini-2.5-flash-lite", contents=

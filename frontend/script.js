@@ -1,4 +1,5 @@
 const API_BASE = "http://127.0.0.1:8000"
+let resume_text="";
 
 async function uploadResume() {
 const fileInput = document.getElementById("resumeFile");
@@ -16,7 +17,9 @@ try {
 
     const data = await res.json();
 
-    document.getElementById("context").value = data.extracted_text;
+    //document.getElementById("context").value = data.extracted_text;
+    resume_text = data.extracted_text;
+    console.log(resume_text)
 
 } catch (err) {
     console.error(err);
@@ -26,7 +29,10 @@ try {
 }
 
 async function askAI() {
-const context = document.getElementById("context").value;
+if (!resume_text) {
+    alert("Please upload a resume first"); return;
+}
+
 const history = document.getElementById("history").value;
 
 try {
@@ -36,7 +42,7 @@ try {
             "Content-Type": "application/json"
         },
         body: JSON.stringify({
-            context: context,
+            context: resume_text,
             history: history
         })
     });

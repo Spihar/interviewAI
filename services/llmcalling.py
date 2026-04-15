@@ -1,4 +1,5 @@
 from google import genai
+import os
 def llmcalling(context,user,history):
     
     # The client gets the API key from the environment variable `GEMINI_API_KEY`.

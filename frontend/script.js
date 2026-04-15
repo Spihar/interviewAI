@@ -1,5 +1,6 @@
 const API_BASE = "http://127.0.0.1:8000"
 let resume_text="";
+let convo = []
 
 async function uploadResume() {
 const fileInput = document.getElementById("resumeFile");
@@ -33,21 +34,29 @@ if (!resume_text) {
     alert("Please upload a resume first"); return;
 }
 
-const history = document.getElementById("history").value;
+const user = document.getElementById("history").value || "";
 
 try {
     const res = await fetch(`${API_BASE}/interview`, {
         method: "POST",
         headers: {
+
             "Content-Type": "application/json"
         },
         body: JSON.stringify({
             context: resume_text,
-            history: history
+            user:user,
+            history: convo
         })
     });
 
     const data = await res.json();
+
+    convo.push({
+            ai: data.response,
+            user:user
+        });
+
 
     document.getElementById("response").innerText = data.response;
 

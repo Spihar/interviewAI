@@ -4,6 +4,7 @@ from services.pdfreading import extract_text_pymupdf
 from pydantic import BaseModel # For defining data models for request and response bodies in FastAPI.
 import os
 from fastapi.middleware.cors import CORSMiddleware
+from typing import List, Dict
 
 
 app = fastapi.FastAPI()
@@ -31,11 +32,14 @@ async def upload_resume(file: fastapi.UploadFile = fastapi.File(...)):
 
 class InterviewRequest(BaseModel):
     context: str
-    history: str
+    user:str
+    history: List[Dict]
+
 
 @app.post("/interview")
 def interview(request: InterviewRequest):
     context=request.context
+    user=request.user
     history=request.history
-    res=llmcalling(context)
+    res=llmcalling(context,user,history)
     return {"response": res}

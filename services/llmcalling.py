@@ -5,7 +5,7 @@ def llmcalling(context,user,history):
     client = genai.Client(api_key="")
 
     response = client.models.generate_content(
-        model="gemini-2.5-flash-lite", contents=
+        model="gemini-2.5-flash", contents=
         f"""
         You are a professional AI interviewer.
 

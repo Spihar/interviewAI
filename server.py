@@ -47,6 +47,7 @@ async def upload_resume(session_id: str, file: fastapi.UploadFile = fastapi.File
 
     # We store the extracted text in the session's context for later use during the interview process.
     session["context"] = text
+    print(f"Extracted text for session {session_id}: {text}")
 
     return {"extracted_text": text}
 
@@ -88,4 +89,5 @@ def interview(request: InterviewRequest):
     history=session["history"]
     res=llmcalling(context,user,history)
     history.append({"user": user, "ai": res})
+    print(f"Session {request.session_id} history: {history}")
     return {"response": res}

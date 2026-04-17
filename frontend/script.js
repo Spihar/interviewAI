@@ -41,9 +41,7 @@ try {
 }
 
 async function askAI() {
-if (!resume_text) {
-    alert("Please upload a resume first"); return;
-}
+    console.log("Asking AI...");
 
 const user = document.getElementById("history").value || "";
 

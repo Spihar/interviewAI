@@ -6,6 +6,8 @@ import os
 from fastapi.middleware.cors import CORSMiddleware
 from typing import List, Dict
 import uuid
+import json
+import re
 
 interview_sessions = {} 
 # A dictionary to store interview sessions, 
@@ -88,6 +90,15 @@ def interview(request: InterviewRequest):
     user=request.user
     history=session["history"]
     res=llmcalling(context,user,history)
-    history.append({"user": user, "ai": res})
+    cleaned=re.sub(r"```json|```", "", res).strip()
+    try:
+        parsed=json.loads(cleaned)
+    except:
+        parsed = {
+        "question": res,
+        "feedback": "Could not parse feedback",
+        "score": 0
+    }
+    history.append({"user": user, "ai": parsed})
     print(f"Session {request.session_id} history: {history}")
-    return {"response": res}
+    return parsed

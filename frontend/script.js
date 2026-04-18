@@ -59,9 +59,23 @@ try {
     });
 
     const data = await res.json();
+    if (data.error) {
+    alert(data.error);
+    return;
+    }
 
 
-    document.getElementById("response").innerText = data.response;
+    const chat = document.getElementById("chat");
+
+    chat.innerHTML += `
+    <div style="margin-bottom:10px;">
+        <p><b>You:</b> ${user}</p>
+        <p><b>AI Question:</b> ${data.question}</p>
+        <p><b>Feedback:</b> ${data.feedback}</p>
+        <p><b>Score:</b> ${data.score}/10</p>
+        <hr/>
+    </div>
+`;
 
 } catch (err) {
     console.error(err);

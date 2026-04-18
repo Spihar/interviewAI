@@ -14,10 +14,8 @@ def llmcalling(context,user,history):
 
         Your job:
         - Ask one interview question at a time.
-        - Base questions on the candidate's resume and previous answers.
-        - Do NOT give explanations.
-        - Do NOT answer for the user.
-        - Always continue the interview.
+        - give feedback on users previous response.
+        - give a score out of 10.
 
         Candidate Resume:
         {context}
@@ -29,13 +27,22 @@ def llmcalling(context,user,history):
         {user}
 
         Instructions:
-        - If no history, start with a basic introduction question.
-        - Otherwise, ask a follow-up or new relevant question.
-        - Keep questions clear and professional.
-        - Do not repeat previous questions.
+        - If no history, ask an introduction question and set feedback="" and score=0
+        - Otherwise:
+            - Give feedback on the user's answer
+            - Give a score from 1 to 10
+            - Ask the next relevant question
+        - Do NOT repeat questions
 
-        Ask the next interview question:
-        and also give feedback based on the user response
+
+        respond strictly in JSON format:
+        {{
+            "question:"next question here",
+            "feedback":"feedback here",
+            "score":number
+        }}
+
+        do not add anything else.
         """
 )
     return response.text

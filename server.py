@@ -5,7 +5,7 @@ from pydantic import BaseModel # For defining data models for request and respon
 import os
 from fastapi.middleware.cors import CORSMiddleware
 from typing import List, Dict
-import uuid
+import uuid 
 import json
 import re
 
@@ -62,7 +62,8 @@ def start_interview():
     # Generate a unique session ID using uuid4, which creates a random UUID.
     interview_sessions[session_id] = {
         "context": "",
-        "history": []
+        "history": [],
+        "completed":False
     }
     return {"session_id": session_id}
 
@@ -74,13 +75,14 @@ class InterviewRequest(BaseModel):
     session_id:str
     user:str
 
-
 @app.post("/interview")
 def interview(request: InterviewRequest):
 
     session = interview_sessions.get(request.session_id)
     if not session:
         return {"error": "Invalid session ID"}
+    if session["completed"]:
+        return {"error": "Interview already ended"}
     
     # We retrieve the context and history for the given session ID, 
     # and then call the llmcalling function to get a response based on the context, user input, and conversation history.
@@ -102,3 +104,23 @@ def interview(request: InterviewRequest):
     history.append({"user": user, "ai": parsed})
     print(f"Session {request.session_id} history: {history}")
     return parsed
+
+
+@app.post("/end_interview")
+def end_interview(request: InterviewRequest):
+    session = interview_sessions.get(request.session_id)
+    if not session:
+        return {"error": "Invalid session ID"}
+    history =session["history"]
+    if not history:
+        return {'ai':'no interview data found'}
+    scores=[]
+    for cnvo in history:
+        scores.append(cnvo["ai"].get("score",0))
+    session["completed"]=True
+    avg_score=round((sum(scores)/len(scores)-1),2) if scores else 0
+    return {
+        "total_questions":len(history),
+        "average_score":avg_score,
+        "status":"interview completed"
+    }

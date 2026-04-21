@@ -1,5 +1,7 @@
 const API_BASE = "http://127.0.0.1:8000"
 let session_id = "";
+let mediaRecorder;
+let audioChunks = [];
 
 // Start a new interview session on page load
 window.onload = () => {
@@ -104,4 +106,35 @@ async function endInterview() {
         <p>Status: ${data.status}</p>
     `;
     
+}
+
+// start recording 
+async function startRecording(){
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    mediaRecorder = new MediaRecorder(stream);
+    mediaRecorder.ondataavailable = (event) => {
+        audioChunks.push(event.data);
+    };
+    mediaRecorder.start();
+
+}
+
+// Stop recording and send audio to backend for transcription
+function stopRecording(){
+    mediaRecorder.stop();
+    mediaRecorder.onstop = async () => {
+        const audioBlob = new Blob(audioChunks, { type: "audio/webm" });
+
+        const formData = new FormData();
+        formData.append("file", audioBlob, "recording.webm");
+
+        const res = await fetch(`${API_BASE}/speech_to_text`, {
+            method: "POST",
+            body: formData
+        });
+        const data = await res.json();
+        document.getElementById("history").value = data.text;
+        audioChunks = [];
+    };
+
 }

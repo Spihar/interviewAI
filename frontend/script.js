@@ -110,6 +110,7 @@ async function endInterview() {
 
 // start recording 
 async function startRecording(){
+    audioChunks = [];
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     mediaRecorder = new MediaRecorder(stream);
     mediaRecorder.ondataavailable = (event) => {
@@ -121,19 +122,30 @@ async function startRecording(){
 
 // Stop recording and send audio to backend for transcription
 function stopRecording(){
+    // Stop the media recorder and process the audio
+    if (!mediaRecorder) return;
     mediaRecorder.stop();
     mediaRecorder.onstop = async () => {
-        const audioBlob = new Blob(audioChunks, { type: "audio/webm" });
+        try {
+            mediaRecorder.stream.getTracks().forEach(track => track.stop());
+            const audioBlob = new Blob(audioChunks, { type: "audio/webm" });
+            const formData = new FormData();
+            formData.append("file", audioBlob, "recording.webm");
 
-        const formData = new FormData();
-        formData.append("file", audioBlob, "recording.webm");
+            document.getElementById("history").value = "Transcribing...";
+            
+            const res = await fetch(`${API_BASE}/speech_to_text`, {
+                method: "POST",
+                body: formData
+            });
+            const data = await res.json();
+            document.getElementById("history").value = data.text;
 
-        const res = await fetch(`${API_BASE}/speech_to_text`, {
-            method: "POST",
-            body: formData
-        });
-        const data = await res.json();
-        document.getElementById("history").value = data.text;
+        }
+        catch (err) {
+            console.error(err);
+            alert("Transcription failed");
+        }
         audioChunks = [];
     };
 

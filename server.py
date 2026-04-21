@@ -1,7 +1,8 @@
 import fastapi
 from services.llmcalling import llmcalling
 from services.pdfreading import extract_text_pymupdf
-from services.speech_to_text import speech_to_text
+#from services.speech_to_text import speech_to_text
+from services.stt import sst
 from pydantic import BaseModel # For defining data models for request and response bodies in FastAPI.
 import os
 from fastapi.middleware.cors import CORSMiddleware
@@ -127,5 +128,10 @@ def end_interview(request: InterviewRequest):
     }
 
 @app.post("/speech_to_text")
-def speech_to_text():
-    pass
+async def speech_to_text(file: fastapi.UploadFile = fastapi.File(...)):
+    file_location = f"temp/{file.filename}"
+    with open(file_location, "wb") as f:
+        f.write(await file.read())
+    text = sst(file_location)
+    os.remove(file_location)  # Clean up the temporary file
+    return {"text": text}

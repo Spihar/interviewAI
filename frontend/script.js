@@ -68,16 +68,18 @@ async function askAI() {
 
 
         const chat = document.getElementById("chat");
-
-        chat.innerHTML += `
-        <div style="margin-bottom:10px;">
-            <p><b>You:</b> ${user}</p>
-            <p><b>AI Question:</b> ${data.question}</p>
-            <p><b>Feedback:</b> ${data.feedback}</p>
-            <p><b>Score:</b> ${data.score}/10</p>
-            <hr/>
+chat.innerHTML += `
+    <div class="bg-gray-900 rounded-xl p-5 border border-gray-800">
+        <p class="text-gray-400 text-sm mb-1">You said</p>
+        <p class="mb-3">${user}</p>
+        <p class="text-blue-400 text-sm mb-1">AI Question</p>
+        <p class="mb-3">${data.question}</p>
+        <div class="flex gap-4 text-sm">
+            <span class="text-gray-400">Feedback: <span class="text-white">${data.feedback}</span></span>
+            <span class="text-gray-400">Score: <span class="text-green-400 font-bold">${data.score}/10</span></span>
         </div>
-    `;
+    </div>
+`;
 
     } catch (err) {
         console.error(err);
@@ -98,13 +100,18 @@ async function endInterview() {
         })
     });
     const data = await res.json();
-    document.getElementById("chat").innerHTML += `
-        <hr>
-        <h3>Final Report</h3>
-        <p>Total Questions: ${data.total_questions}</p>
-        <p>Average Score: ${data.average_score}/10</p>
-        <p>Status: ${data.status}</p>
-    `;
+    chat.innerHTML += `
+    <div class="bg-gray-900 rounded-xl p-5 border border-gray-800">
+        <p class="text-gray-400 text-sm mb-1">You said</p>
+        <p class="mb-3">${user}</p>
+        <p class="text-blue-400 text-sm mb-1">AI Question</p>
+        <p class="mb-3">${data.question}</p>
+        <div class="flex gap-4 text-sm">
+            <span class="text-gray-400">Feedback: <span class="text-white">${data.feedback}</span></span>
+            <span class="text-gray-400">Score: <span class="text-green-400 font-bold">${data.score}/10</span></span>
+        </div>
+    </div>
+`;
     
 }
 

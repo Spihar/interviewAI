@@ -4,20 +4,64 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>InterviewAI</title>
+    <script src="https://cdn.tailwindcss.com"></script>
 </head>
-<body>
-    <h1>Welcome to InterviewAI</h1>
-    <p>This is a simple interface for our AI-powered interview platform.</p>
-    <h3>Upload your resume:</h3>
-    <input type="file" id="resumeFile"> <button type="button" onclick="uploadResume()">Upload</button>
-    <h3>chat</h3>
-    <textarea id="history" rows="5" cols="80" placeholder="enter your answer here"></textarea><br><br> 
-    <button onclick="startRecording()">Start Recording</button>
-    <button onclick="stopRecording()">Stop Recording</button>
-    <button type="button" onclick="askAI()">Ask AI</button>
-    <h3>Response:</h3> 
-    <div id="chat"></div>
-    <button type="button" onclick="endInterview()">End</button>
+<body class="bg-gray-950 text-white min-h-screen flex flex-col items-center py-10 px-4">
+
+    <div class="w-full max-w-2xl">
+        <h1 class="text-3xl font-bold text-center mb-2">InterviewAI</h1>
+        <p class="text-center text-gray-400 mb-8">AI-powered mock interview platform</p>
+
+        <!-- Resume Upload -->
+        <div class="bg-gray-900 rounded-xl p-5 mb-5">
+            <h3 class="text-lg font-semibold mb-3">Upload Resume</h3>
+            <div class="flex gap-3">
+                <input type="file" id="resumeFile" 
+                    class="flex-1 text-sm text-gray-400 file:mr-3 file:py-2 file:px-4 
+                    file:rounded-lg file:border-0 file:bg-blue-600 file:text-white 
+                    file:cursor-pointer"/>
+                <button onclick="uploadResume()"
+                    class="bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded-lg text-sm font-medium">
+                    Upload
+                </button>
+            </div>
+        </div>
+
+        <!-- Answer Input -->
+        <div class="bg-gray-900 rounded-xl p-5 mb-5">
+            <h3 class="text-lg font-semibold mb-3">Your Answer</h3>
+            <textarea id="history" rows="4" placeholder="Your answer will appear here..."
+                class="w-full bg-gray-800 text-white rounded-lg p-3 text-sm 
+                resize-none border border-gray-700 focus:outline-none focus:border-blue-500">
+            </textarea>
+            
+            <!-- Recording + Submit buttons -->
+            <div class="flex gap-3 mt-3">
+                <button onclick="startRecording()"
+                    class="flex-1 bg-green-600 hover:bg-green-700 py-2 rounded-lg text-sm font-medium">
+                    Start Recording
+                </button>
+                <button onclick="stopRecording()"
+                    class="flex-1 bg-red-600 hover:bg-red-700 py-2 rounded-lg text-sm font-medium">
+                    stop
+                </button>
+                <button onclick="askAI()"
+                    class="flex-1 bg-blue-600 hover:bg-blue-700 py-2 rounded-lg text-sm font-medium">
+                    Submit Answer
+                </button>
+            </div>
+        </div>
+
+        <!-- Chat History -->
+        <div id="chat" class="space-y-4 mb-5"></div>
+
+        <!-- End Interview -->
+        <button onclick="endInterview()"
+            class="w-full bg-gray-700 hover:bg-gray-600 py-3 rounded-xl font-medium">
+            End Interview
+        </button>
+    </div>
+
     <script src="script.js"></script>
 </body>
 </html>

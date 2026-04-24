@@ -101,16 +101,12 @@ async function endInterview() {
     });
     const data = await res.json();
     chat.innerHTML += `
-    <div class="bg-gray-900 rounded-xl p-5 border border-gray-800">
-        <p class="text-gray-400 text-sm mb-1">You said</p>
-        <p class="mb-3">${user}</p>
-        <p class="text-blue-400 text-sm mb-1">AI Question</p>
-        <p class="mb-3">${data.question}</p>
-        <div class="flex gap-4 text-sm">
-            <span class="text-gray-400">Feedback: <span class="text-white">${data.feedback}</span></span>
-            <span class="text-gray-400">Score: <span class="text-green-400 font-bold">${data.score}/10</span></span>
-        </div>
-    </div>
+    <div class="bg-red-950 border border-red-800 rounded-xl p-5 mt-4">
+  <h3 class="text-xl font-bold text-red-400 mb-3">Final Report</h3>
+  <p>Total Questions: ${data.total_questions}</p>
+  <p>Average Score: ${data.average_score}/10</p>
+  <p>Status: ${data.status}</p>
+</div>
 `;
     
 }

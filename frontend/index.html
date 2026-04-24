@@ -1,67 +1,125 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>InterviewAI</title>
-    <script src="https://cdn.tailwindcss.com"></script>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <title>InterviewAI</title>
 </head>
-<body class="bg-gray-950 text-white min-h-screen flex flex-col items-center py-10 px-4">
 
-    <div class="w-full max-w-2xl">
-        <h1 class="text-3xl font-bold text-center mb-2">InterviewAI</h1>
-        <p class="text-center text-gray-400 mb-8">AI-powered mock interview platform</p>
+<body class="bg-slate-950 text-white min-h-screen">
 
-        <!-- Resume Upload -->
-        <div class="bg-gray-900 rounded-xl p-5 mb-5">
-            <h3 class="text-lg font-semibold mb-3">Upload Resume</h3>
-            <div class="flex gap-3">
-                <input type="file" id="resumeFile" 
-                    class="flex-1 text-sm text-gray-400 file:mr-3 file:py-2 file:px-4 
-                    file:rounded-lg file:border-0 file:bg-blue-600 file:text-white 
-                    file:cursor-pointer"/>
-                <button onclick="uploadResume()"
-                    class="bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded-lg text-sm font-medium">
-                    Upload
-                </button>
-            </div>
-        </div>
+  <!-- Main Container -->
+  <div class="max-w-5xl mx-auto px-6 py-10">
 
-        <!-- Answer Input -->
-        <div class="bg-gray-900 rounded-xl p-5 mb-5">
-            <h3 class="text-lg font-semibold mb-3">Your Answer</h3>
-            <textarea id="history" rows="4" placeholder="Your answer will appear here..."
-                class="w-full bg-gray-800 text-white rounded-lg p-3 text-sm 
-                resize-none border border-gray-700 focus:outline-none focus:border-blue-500">
-            </textarea>
-            
-            <!-- Recording + Submit buttons -->
-            <div class="flex gap-3 mt-3">
-                <button onclick="startRecording()"
-                    class="flex-1 bg-green-600 hover:bg-green-700 py-2 rounded-lg text-sm font-medium">
-                    Start Recording
-                </button>
-                <button onclick="stopRecording()"
-                    class="flex-1 bg-red-600 hover:bg-red-700 py-2 rounded-lg text-sm font-medium">
-                    stop
-                </button>
-                <button onclick="askAI()"
-                    class="flex-1 bg-blue-600 hover:bg-blue-700 py-2 rounded-lg text-sm font-medium">
-                    Submit Answer
-                </button>
-            </div>
-        </div>
-
-        <!-- Chat History -->
-        <div id="chat" class="space-y-4 mb-5"></div>
-
-        <!-- End Interview -->
-        <button onclick="endInterview()"
-            class="w-full bg-gray-700 hover:bg-gray-600 py-3 rounded-xl font-medium">
-            End Interview
-        </button>
+    <!-- Header -->
+    <div class="mb-10 text-center">
+      <h1 class="text-5xl font-bold tracking-tight text-blue-400 mb-3">
+        InterviewAI
+      </h1>
+      <p class="text-slate-400 text-lg">
+        Practice interviews with your AI-powered assistant
+      </p>
     </div>
 
-    <script src="script.js"></script>
+    <!-- Grid Layout -->
+    <div class="grid md:grid-cols-2 gap-8">
+
+      <!-- Left Side -->
+      <div class="bg-slate-900 rounded-2xl p-6 shadow-lg border border-slate-800">
+
+        <h2 class="text-2xl font-semibold mb-5">Resume Upload</h2>
+
+        <input 
+          type="file" 
+          id="resumeFile"
+          class="block w-full text-sm text-slate-300
+          file:mr-4 file:py-2 file:px-4
+          file:rounded-lg file:border-0
+          file:text-sm file:font-semibold
+          file:bg-blue-500 file:text-white
+          hover:file:bg-blue-600 mb-4"
+        >
+
+        <button
+          type="button"
+          onclick="uploadResume()"
+          class="w-full bg-blue-500 hover:bg-blue-600 transition rounded-xl py-3 font-semibold"
+        >
+          Upload Resume
+        </button>
+
+      </div>
+
+      <!-- Right Side -->
+      <div class="bg-slate-900 rounded-2xl p-6 shadow-lg border border-slate-800">
+
+        <h2 class="text-2xl font-semibold mb-5">Interview Chat</h2>
+
+        <textarea
+          id="history"
+          rows="7"
+          placeholder="Enter your answer here..."
+          class="w-full bg-slate-800 border border-slate-700 rounded-xl p-4 text-white placeholder-slate-500 resize-none focus:outline-none focus:ring-2 focus:ring-blue-500"
+        ></textarea>
+
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-4">
+
+          <button
+            onclick="startRecording()"
+            class="bg-green-500 hover:bg-green-600 py-3 rounded-xl font-semibold"
+          >
+            Start Recording
+          </button>
+
+          <button
+            onclick="stopRecording()"
+            class="bg-red-500 hover:bg-red-600 py-3 rounded-xl font-semibold"
+          >
+            Stop Recording
+          </button>
+
+          <button
+            onclick="askAI()"
+            class="bg-blue-500 hover:bg-blue-600 py-3 rounded-xl font-semibold"
+          >
+            Ask AI
+          </button>
+
+        </div>
+
+      </div>
+
+    </div>
+
+    <!-- Response Section -->
+    <div class="mt-8 bg-slate-900 rounded-2xl p-6 shadow-lg border border-slate-800">
+
+      <h2 class="text-2xl font-semibold mb-4">AI Response</h2>
+
+      <div 
+        id="chat"
+        class="min-h-[150px] bg-slate-800 rounded-xl p-4 text-slate-200"
+      >
+      </div>
+
+    </div>
+
+    <!-- End Button -->
+    <div class="mt-8 text-center">
+      <button
+        type="button"
+        onclick="endInterview()"
+        class="bg-red-600 hover:bg-red-700 px-8 py-3 rounded-xl font-semibold text-lg"
+      >
+        End Interview
+      </button>
+    </div>
+
+  </div>
+
+  <script src="script.js"></script>
+
 </body>
 </html>
+```

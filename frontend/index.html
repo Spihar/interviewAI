@@ -1,23 +1,117 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>InterviewAI</title>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>InterviewAI</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-    <h1>Welcome to InterviewAI</h1>
-    <p>This is a simple interface for our AI-powered interview platform.</p>
-    <h3>Upload your resume:</h3>
-    <input type="file" id="resumeFile"> <button type="button" onclick="uploadResume()">Upload</button>
-    <h3>chat</h3>
-    <textarea id="history" rows="5" cols="80" placeholder="enter your answer here"></textarea><br><br> 
-    <button onclick="startRecording()">Start Recording</button>
-    <button onclick="stopRecording()">Stop Recording</button>
-    <button type="button" onclick="askAI()">Ask AI</button>
-    <h3>Response:</h3> 
-    <div id="chat"></div>
-    <button type="button" onclick="endInterview()">End</button>
-    <script src="script.js"></script>
+
+<div class="app-shell">
+  <!-- ── Top bar ── -->
+  <header class="topbar">
+    <div class="topbar-logo">
+      <div class="topbar-logo-dot">
+        <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14H9V8h2v8zm4 0h-2V8h2v8z"/></svg>
+      </div>
+      InterviewAI
+    </div>
+    <div class="topbar-divider"></div>
+    <div class="session-badge" id="sessionBadge">
+      <span class="dot"></span>
+      <span id="sessionIdLabel">Initialising…</span>
+    </div>
+  </header>
+
+  <!-- ── Sidebar ── -->
+  <aside class="sidebar">
+
+    <!-- Resume upload -->
+    <div class="sidebar-section">
+      <div class="sidebar-label">Your Resume</div>
+      <div class="resume-zone" id="resumeZone" onclick="document.getElementById('resumeFile').click()">
+        <div class="resume-zone-icon">📄</div>
+        <p id="resumeZoneText">Click to upload your resume<br/><small style="font-size:11px;">PDF, DOC, DOCX</small></p>
+        <input type="file" id="resumeFile" accept=".pdf,.doc,.docx" onchange="handleFileSelect()" />
+      </div>
+      <button class="upload-btn" id="uploadBtn" onclick="uploadResume()">Upload Resume</button>
+    </div>
+
+    <!-- Live stats -->
+    <div class="sidebar-section">
+      <div class="sidebar-label">Session Stats</div>
+      <div class="stats-grid">
+        <div class="stat-card">
+          <div class="stat-card-label">Questions</div>
+          <div class="stat-card-val" id="statQ">0</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-card-label">Avg Score</div>
+          <div class="stat-card-val" id="statScore">—<span>/10</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tips -->
+    <div class="sidebar-section" style="flex:1;">
+      <div class="sidebar-label">Quick Tips</div>
+      <div class="tip-item"><span class="tip-icon">💡</span> Use the STAR method: Situation, Task, Action, Result.</div>
+      <div class="tip-item"><span class="tip-icon">🎙️</span> You can answer by voice — hit the mic icon below.</div>
+      <div class="tip-item"><span class="tip-icon">📄</span> Upload your resume first for tailored questions.</div>
+      <div class="tip-item"><span class="tip-icon">⏱️</span> Take a moment to think before answering — it's okay!</div>
+    </div>
+
+    <!-- End interview -->
+    <button class="end-btn" onclick="endInterview()">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M15 9l-6 6M9 9l6 6"/></svg>
+      End Interview & Get Report
+    </button>
+  </aside>
+
+  <!-- ── Chat ── -->
+  <main class="chat-area">
+    <div class="chat-status-bar" id="chatStatusBar">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 8v4l3 3"/></svg>
+      Upload your resume and start answering questions
+    </div>
+
+    <div class="chat-messages" id="chat">
+      <!-- Empty state shown by default -->
+      <div class="empty-state" id="emptyState">
+        <div class="empty-icon">🤖</div>
+        <h3>Ready when you are</h3>
+        <p>Upload your resume on the left, then type your first answer or use the mic to speak. The AI will guide you through the interview.</p>
+      </div>
+    </div>
+
+    <!-- Input -->
+    <div class="input-area">
+      <div class="input-row">
+        <div class="input-wrapper">
+          <textarea id="history" rows="1" placeholder="Type your answer here…" oninput="onInputChange(this)"></textarea>
+          <div class="input-toolbar">
+            <button class="record-btn" id="recordBtn" onclick="toggleRecording()">
+              <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 15c1.66 0 3-1.34 3-3V6c0-1.66-1.34-3-3-3S9 4.34 9 6v6c0 1.66 1.34 3 3 3zm5-3c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-2.08c3.39-.49 6-3.39 6-6.92h-2z"/></svg>
+              <span id="recordLabel">Speak</span>
+            </button>
+            <span class="input-spacer"></span>
+            <span class="char-count" id="charCount">0</span>
+          </div>
+        </div>
+        <button class="send-btn" id="sendBtn" onclick="askAI()" title="Send answer">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>
+          </svg>
+        </button>
+      </div>
+    </div>
+  </main>
+
+</div>
+
+<script src="script.js"></script>
 </body>
 </html>

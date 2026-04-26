@@ -7,7 +7,6 @@ cffi==2.0.0
 charset-normalizer==3.4.6
 click==8.3.1
 colorama==0.4.6
-comtypes==1.4.16
 cryptography==46.0.6
 ctranslate2==4.7.1
 distro==1.9.0
@@ -46,11 +45,8 @@ pydantic==2.12.5
 pydantic_core==2.41.5
 Pygments==2.20.0
 PyMuPDF==1.27.2
-pypiwin32==223
 pytesseract==0.3.13
 python-multipart==0.0.22
-pyttsx3==2.99
-pywin32==311
 PyYAML==6.0.3
 regex==2026.3.32
 requests==2.33.0

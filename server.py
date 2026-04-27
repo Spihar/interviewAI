@@ -78,7 +78,7 @@ class InterviewRequest(BaseModel):
     user:str
 
 @app.post("/interview")
-def interview(request: InterviewRequest):
+async def interview(request: InterviewRequest):
 
     session = interview_sessions.get(request.session_id)
     if not session:

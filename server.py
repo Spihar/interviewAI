@@ -120,7 +120,7 @@ def end_interview(request: InterviewRequest):
     for cnvo in history:
         scores.append(cnvo["ai"].get("score",0))
     session["completed"]=True
-    avg_score=round((sum(scores)/len(scores)-1),2) if scores else 0
+    avg_score=round((sum(scores)/len(scores)),2) if scores else 0
     return {
         "total_questions":len(history),
         "average_score":avg_score,

@@ -2,6 +2,7 @@ import fastapi
 from services.llmcalling import llmcalling
 from services.pdfreading import extract_text_pymupdf
 #from services.speech_to_text import speech_to_text
+from services.llmfeedback import llmfeedback
 from services.stt import sst
 from pydantic import BaseModel # For defining data models for request and response bodies in FastAPI.
 import os
@@ -121,9 +122,25 @@ def end_interview(request: InterviewRequest):
         scores.append(cnvo["ai"].get("score",0))
     session["completed"]=True
     avg_score=round((sum(scores)/len(scores)),2) if scores else 0
+
+    #change to llm feedbacking
+    feedbackdata=llmfeedback(history)
+    cleaned=re.sub(r"```json|```", "", feedbackdata).strip()
+    try:
+        parsed=json.loads(cleaned)
+    except:
+        parsed={
+            "feedback":feedbackdata,
+            "score":0,
+            "improvements":"Could not parse response"
+        }
+    
     return {
         "total_questions":len(history),
         "average_score":avg_score,
+        "llm_score":parsed.get("score",0),
+        "feedback":parsed.get("feedback","No feedback provided"),
+        "improvements":parsed.get("improvements","No improvements provided"),
         "status":"interview completed"
     }
 

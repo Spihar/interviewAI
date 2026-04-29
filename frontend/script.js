@@ -158,6 +158,13 @@ async function endInterview() {
       body: JSON.stringify({ session_id, user: "" }),
     });
     const data = await res.json();
+    //data from server
+    //"total_questions":len(history),
+    //    "average_score":avg_score,
+    //    "llm_score":parsed.get("score",0),
+    //    "feedback":parsed.get("feedback","No feedback provided"),
+    //    "improvements":parsed.get("improvements","No improvements provided"),
+    //    "status":"interview completed"
     removeTypingIndicator(typingId);
     addReportCard(data);
     setStatus("Interview complete — check your report below");
@@ -280,11 +287,13 @@ function addFeedbackCard(feedback, score) {
 function addReportCard(data) {
   const chat = document.getElementById("chat");
   const avg = parseFloat(data.average_score) || 0;
+  const llm = parseFloat(data.llm_score) || 0;
   const pillClass = avg >= 7 ? "good" : avg >= 4 ? "ok" : "low";
+
   const card = document.createElement("div");
   card.className = "report-card";
   card.innerHTML = `
-    <h3>🏁 Interview Complete</h3>
+    <h3>Interview Complete</h3> 
     <div class="report-row">
       <span class="report-row-label">Total Questions</span>
       <span class="report-row-val">${data.total_questions}</span>
@@ -294,8 +303,25 @@ function addReportCard(data) {
       <span class="report-row-val"><span class="score-pill ${pillClass}">${avg.toFixed(1)}/10</span></span>
     </div>
     <div class="report-row">
+      <span class="report-row-label">Final AI Score</span>
+      <span class="report-row-val">
+        <span class="score-pill ${pillClass}">${llm}/10</span>
+      </span>
+    </div>
+
+    <div class="report-row">
       <span class="report-row-label">Status</span>
       <span class="report-row-val">${escHtml(data.status)}</span>
+    </div>
+
+    <div style="margin-top:14px; padding-top:14px; border-top:1px solid var(--border2);">
+      <div style="font-size:10.5px; font-weight:600; letter-spacing:.8px; text-transform:uppercase; color:var(--accent-dark); margin-bottom:6px;">Feedback</div>
+      <div style="font-size:13.5px; color:var(--text-primary); line-height:1.65;">${escHtml(data.feedback)}</div>
+    </div>
+
+    <div style="margin-top:14px; padding-top:14px; border-top:1px solid var(--border2);">
+      <div style="font-size:10.5px; font-weight:600; letter-spacing:.8px; text-transform:uppercase; color:var(--accent-dark); margin-bottom:6px;">Areas to Improve</div>
+      <div style="font-size:13.5px; color:var(--text-primary); line-height:1.65;">${escHtml(data.improvements)}</div>
     </div>
   `;
   chat.appendChild(card);

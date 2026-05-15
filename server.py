@@ -2,7 +2,6 @@ import fastapi
 from fastapi import Header, HTTPException, Depends
 from services.llmcalling import llmcalling
 from services.pdfreading import extract_text_pymupdf
-#from services.speech_to_text import speech_to_text
 from services.llmfeedback import llmfeedback
 from services.stt import sst
 from pydantic import BaseModel # For defining data models for request and response bodies in FastAPI.

@@ -6,9 +6,46 @@ let isRecording = false;
 let questionCount = 0;
 let totalScore = 0;
 
+// ── Supabase client setup ─────────────────────────────────────────────────────
+// Supabase is our authentication provider. It handles user accounts, login, and JWT management.
+// We use the anon key here because we're only using Supabase for auth, and all sensitive operations are done in the backend where we verify the JWT.
+// The onAuthStateChange listener keeps our frontend in sync with the user's auth status (e.g. if they log out in another tab).
+const SUPABASE_URL  = "https://hincwkkvpdhaoyciailp.supabase.co";
+const SUPABASE_ANON = "sb_publishable_RyzMJZWK_hBE9qHpubmsIg_1LJNyHPp";
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON);
+
+let currentUser  = null;
+let accessToken  = null;
 // ── Session init ──────────────────────────────────────────────────────────────
-window.onload = () => {
-  startSession();
+// This runs before anything else.
+// If the user is not logged in, they get kicked to auth.html immediately.
+// The page will appear blank for a split second — that's normal and correct.
+window.onload = async() => {
+  // getSession() reads the token from localStorage (Supabase stored it there
+  // when the user logged in on auth.html). It also auto-refreshes expired tokens.
+  const { data: { session } } = await sb.auth.getSession();
+  if (!session) {
+    // No session = not logged in. Hard redirect.
+    window.location.href = "auth.html";
+    return; // stop everything below from running
+  }
+  // We have a valid session. Store what we need.
+  currentUser = session.user;
+  accessToken = session.access_token; // JWT we'll attach to every API call
+  // Show the user's name in the topbar
+  const name = currentUser.user_metadata?.full_name || currentUser.email.split("@")[0];
+  document.getElementById("userNameLabel").textContent = name;
+  // Keep accessToken fresh if Supabase refreshes the session in the background
+  sb.auth.onAuthStateChange((_event, newSession) => {
+    if (newSession) {
+      accessToken = newSession.access_token;
+    } else {
+      // Session died (user deleted, token revoked, etc) — redirect to login
+      window.location.href = "auth.html";
+    }
+  }); 
+
+  await startSession();
   // Auto-resize textarea
   const ta = document.getElementById("history");
   ta.addEventListener("input", () => {
@@ -23,11 +60,34 @@ window.onload = () => {
     }
   });
 };
+// ── LOGOUT ────────────────────────────────────────────────────────────────────
+// Clears the JWT from localStorage and ends the Supabase session.
+// After this, getSession() will return null — auth guard kicks them out.
+async function logout() {
+  await sb.auth.signOut();
+  window.location.href = "auth.html";
+}
+// ------------------------important note about auth-------------------------
+// The JWT (accessToken) is stored in localStorage by the Supabase SDK when the user logs in.
+// We read this token on page load and attach it to every API call in the authHeaders() function below.
+// FastAPI verifies this token on each request to authenticate the user.
+// If the token is missing/invalid/expired, the backend will reject the request and we can handle that in the frontend (e.g. show an error or redirect to login).
+// ── HELPER: attach auth header to every API call ──────────────────────────────
+// Instead of copy-pasting the Authorization header everywhere, use this.
+// FastAPI reads this header, verifies the JWT with Supabase, and gets user_id.
+function authHeaders(extra = {}) {
+  return {
+    "Authorization": `Bearer ${accessToken}`,  // JWT goes here
+    ...extra
+  };
+}
 
 async function startSession() {
   try {
-    const res = await fetch(`${API_BASE}/start_interview`, { method: "POST" });
+    const res = await fetch(`${API_BASE}/start_interview`, { method: "POST",headers: authHeaders() });
     const data = await res.json();
+    if (data.error) throw new Error(data.error);
+
     session_id = data.session_id;
     document.getElementById("sessionIdLabel").textContent = "Session " + session_id.slice(0, 8);
     document.getElementById("sessionBadge").classList.add("active");
@@ -64,6 +124,7 @@ async function uploadResume() {
   try {
     const res = await fetch(`${API_BASE}/upload_resume?session_id=${session_id}`, {
       method: "POST",
+      headers: authHeaders(), // Attach auth header with JWT
       body: formData,
     });
     const data = await res.json();
@@ -108,7 +169,7 @@ async function askAI() {
   try {
     const res = await fetch(`${API_BASE}/interview`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: authHeaders({ "Content-Type": "application/json" }), // Attach auth header with JWT
       body: JSON.stringify({ session_id, user }),
     });
     const data = await res.json();
@@ -154,7 +215,7 @@ async function endInterview() {
   try {
     const res = await fetch(`${API_BASE}/end_interview`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: authHeaders({ "Content-Type": "application/json" }), // Attach auth header with JWT
       body: JSON.stringify({ session_id, user: "" }),
     });
     const data = await res.json();
@@ -221,7 +282,7 @@ function stopRecording() {
 
       document.getElementById("history").value = "Transcribing…";
 
-      const res = await fetch(`${API_BASE}/speech_to_text`, { method: "POST", body: formData });
+      const res = await fetch(`${API_BASE}/speech_to_text`, { method: "POST", headers: authHeaders(), body: formData });
       const data = await res.json();
       document.getElementById("history").value = data.text;
       document.getElementById("charCount").textContent = data.text.length;

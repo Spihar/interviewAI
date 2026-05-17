@@ -24,6 +24,25 @@
       <span class="dot"></span>
       <span id="sessionIdLabel">Initialising…</span>
     </div>
+    <!-- User info + logout — pushed to the right -->
+    <div style="margin-left:auto; display:flex; align-items:center; gap:12px;">
+      <span id="userNameLabel" style="font-size:13px; color:var(--text-muted);"></span>
+      <button onclick="logout()" style="
+        padding: 5px 13px;
+        font-family: 'DM Sans', sans-serif;
+        font-size: 12px; font-weight: 500;
+        background: transparent;
+        border: 1.5px solid var(--border2);
+        border-radius: 8px;
+        color: var(--text-muted);
+        cursor: pointer;
+        transition: border-color .15s, color .15s;
+      "
+      onmouseover="this.style.color='var(--danger)';this.style.borderColor='var(--danger)'"
+      onmouseout="this.style.color='var(--text-muted)';this.style.borderColor='var(--border2)'">
+        Sign Out
+      </button>
+    </div>
   </header>
 
   <!-- ── Sidebar ── -->
@@ -111,7 +130,7 @@
   </main>
 
 </div>
-
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="script.js"></script>
 </body>
 </html>

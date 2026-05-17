@@ -184,6 +184,12 @@ async function askAI() {
       // Add feedback card
       addFeedbackCard(data.feedback, data.score);
 
+      if (data.decision === "stop") {
+        setStatus("Interview completed — generating final report...");
+        await endInterview();
+        return;
+      }
+
       // Update stats
       questionCount++;
       totalScore += parseFloat(data.score) || 0;

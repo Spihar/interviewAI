@@ -137,6 +137,12 @@ async def start_interview(user=Depends(get_current_user)):
         "user_id": user_id,
         "context": "",
         "history": [],
+        "evaluation_state":{
+            "technical_depth":0,
+            "communication":0,
+            "problem_solving":0,
+            "project_experience":0
+        },
         "completed":False,
         "interview_id": interview_id # Store the interview ID from the database in the session data for later reference
     }
@@ -169,17 +175,31 @@ async def interview(request: InterviewRequest, user=Depends(get_current_user)):
     context=session["context"]
     user_answer=request.user
     history=session["history"]
-    res=llmcalling(context,user_answer,history)
+    evaluation_state=session["evaluation_state"]
+    res=llmcalling(context,user_answer,history,evaluation_state)
     cleaned=re.sub(r"```json|```", "", res).strip()
     try:
         parsed=json.loads(cleaned)
-    except:
+        if "evaluation_update" in parsed:
+            session["evaluation_state"] = parsed["evaluation_update"]
+        history.append({"user": user_answer, "ai": parsed})
+        min_questions=5
+        if parsed.get("decision","continue")=="stop":
+            if len(history)<min_questions:
+                parsed["decision"]="continue"
+                parsed["reason"]=f"Minimum question threshold not met. Asked {len(history)} questions, need at least {min_questions}."
+            else:
+                session["completed"]=True
+
+    except json.JSONDecodeError:
         parsed = {
         "question": res,
         "feedback": "Could not parse feedback",
         "score": 0
     }
-    history.append({"user": user_answer, "ai": parsed})
+        history.append({ "user": user_answer, "ai": parsed })
+    
+    
     print(f"Session {request.session_id} history: {history}")
     return parsed
 

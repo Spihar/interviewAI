@@ -1,7 +1,12 @@
 import os
+import importlib.util
 import httpx
 from dotenv import load_dotenv
 load_dotenv()
+
+# Warn once at startup if neither transcription backend is available.
+if not os.getenv("GROQ_API_KEY") and importlib.util.find_spec("faster_whisper") is None:
+    print("WARNING: voice transcription will fail: add GROQ_API_KEY to .env or run `pip install faster-whisper`.")
 
 # Groq's hosted Whisper is fast and light enough for a free host.
 # Without GROQ_API_KEY we fall back to running faster-whisper locally (pip install faster-whisper).

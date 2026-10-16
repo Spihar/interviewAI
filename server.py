@@ -21,6 +21,18 @@ from db import supabase
 
 LLM_MODEL = "gemini-2.5-flash"   # model used by services/llmcalling.py, saved with each chat_history row
 
+MAX_UPLOAD_BYTES = 10 * 1024 * 1024   # resume and audio uploads are capped at 10 MB
+# Browser recording MIME types -> file extension, so Groq Whisper can tell the format.
+AUDIO_EXTENSIONS = {
+    "audio/webm": ".webm",
+    "audio/ogg": ".ogg",
+    "audio/mp4": ".mp4",
+    "audio/x-m4a": ".m4a",
+    "audio/mpeg": ".mp3",
+    "audio/wav": ".wav",
+    "audio/x-wav": ".wav",
+}
+
 # Interview sessions are stored in the interviews table (history, evaluation_state, completed),
 # and the interviews row id is used as the session ID.
 # This keeps interviews alive across server restarts instead of losing them from memory.
@@ -124,11 +136,18 @@ async def upload_resume(session_id: str, file: fastapi.UploadFile = fastapi.File
     # extract text from it using our PDF reading service, 
     # and then clean up the temporary file. Finally, we return the extracted text in the response.
 
-    file_location = f"temp/{file.filename}"
+    data = await file.read()
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="Resume file is too large (max 10 MB)")
+    # A random name so the client's filename can't pick the path or collide with another upload.
+    os.makedirs("temp", exist_ok=True)
+    file_location = f"temp/{uuid.uuid4().hex}.pdf"
     with open(file_location, "wb") as f:
-        f.write(await file.read())
-    text = extract_text_pymupdf(file_location)
-    os.remove(file_location)  # Clean up the temporary file
+        f.write(data)
+    try:
+        text = extract_text_pymupdf(file_location)
+    finally:
+        os.remove(file_location)  # Clean up the temporary file
 
     # We store the extracted text as the interview's resume_text, which load_session uses as the session's context.
     session["context"] = text
@@ -569,10 +588,16 @@ async def get_report(interview_id: str, user=Depends(get_current_user)):
 @app.post("/speech_to_text")
 async def speech_to_text(file: fastapi.UploadFile = fastapi.File(...), user=Depends(get_current_user)):
     # A unique name per upload so two people speaking at once don't overwrite each other's audio.
+    data = await file.read()
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="Recording too long, please keep answers under a few minutes")
+    # Groq detects the audio format from the extension; Safari records mp4 and Firefox ogg.
+    content_type = (file.content_type or "").split(";")[0].strip().lower()
+    ext = AUDIO_EXTENSIONS.get(content_type, ".webm")
     os.makedirs("temp", exist_ok=True)
-    file_location = f"temp/{uuid.uuid4().hex}.webm"
+    file_location = f"temp/{uuid.uuid4().hex}{ext}"
     with open(file_location, "wb") as f:
-        f.write(await file.read())
+        f.write(data)
     try:
         text = await run_in_threadpool(sst, file_location)
     except Exception as e:

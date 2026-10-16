@@ -52,5 +52,11 @@ change the directory to frontend
 cd frontend
 python -m http.server 5500
 
+**Voice**
+
+Speech-to-text uses Groq Whisper. Add GROQ_API_KEY=your_groq_api_key to .env (get a free key at console.groq.com).
+Without it, run pip install faster-whisper to transcribe locally instead.
+The AI's questions are read aloud by the browser; turn this on or off with the Voice button.
+
 
 

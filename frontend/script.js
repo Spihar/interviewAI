@@ -5,7 +5,9 @@ let audioChunks = [];
 let isRecording = false;
 let questionCount = 0;
 let totalScore = 0;
-let voiceOn = localStorage.getItem("voiceOn") !== "false"; // read AI questions aloud
+// Read AI questions aloud; defaults to on, and localStorage can throw in private windows.
+let voiceOn = true;
+try { voiceOn = localStorage.getItem("voiceOn") !== "false"; } catch (e) { voiceOn = true; }
 
 // ── Supabase client setup ─────────────────────────────────────────────────────
 // Supabase is our authentication provider. It handles user accounts, login, and JWT management.
@@ -310,9 +312,12 @@ function stopRecording() {
   mediaRecorder.onstop = async () => {
     try {
       mediaRecorder.stream.getTracks().forEach((t) => t.stop());
-      const audioBlob = new Blob(audioChunks, { type: "audio/webm" });
+      // Safari records mp4 and Firefox ogg, so keep the recorder's real type and a matching extension.
+      const mimeType = mediaRecorder.mimeType || "audio/webm";
+      const ext = mimeType.includes("mp4") ? "mp4" : mimeType.includes("ogg") ? "ogg" : "webm";
+      const audioBlob = new Blob(audioChunks, { type: mimeType });
       const formData = new FormData();
-      formData.append("file", audioBlob, "recording.webm");
+      formData.append("file", audioBlob, `recording.${ext}`);
 
       document.getElementById("history").value = "Transcribing…";
 
@@ -383,7 +388,7 @@ function stopSpeaking() {
 
 function toggleVoice() {
   voiceOn = !voiceOn;
-  localStorage.setItem("voiceOn", voiceOn);
+  try { localStorage.setItem("voiceOn", voiceOn); } catch (e) { /* storage blocked: keep the choice for this page only */ }
   if (!voiceOn) stopSpeaking();
   renderVoiceBtn();
 }

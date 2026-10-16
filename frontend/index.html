@@ -3,132 +3,126 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>InterviewAI</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=DM+Mono:wght@400;500&family=Fraunces:opsz,wght@9..144,500;9..144,600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="theme.css" />
+  <script src="theme.js"></script>
+  <title>InterviewAI · Interview</title>
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
 
-<div class="app-shell">
-  <!-- ── Top bar ── -->
-  <header class="topbar">
-    <div class="topbar-logo">
-      <div class="topbar-logo-dot">
-        <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14H9V8h2v8zm4 0h-2V8h2v8z"/></svg>
+<div class="shell">
+  <nav class="nav" aria-label="Main">
+    <a class="brand" href="dashboard.html"><i>AI</i>InterviewAI</a>
+    <a class="nav-link" href="dashboard.html" data-nav="dashboard"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg><span>Dashboard</span></a>
+    <a class="nav-link" href="index.html" data-nav="interview" aria-current="page"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg><span>New interview</span></a>
+    <div class="nav-foot">
+      <button class="nav-link" data-theme-toggle type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg><span>Dark mode</span></button>
+      <button class="nav-link" onclick="logout()" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/></svg><span>Sign out</span></button>
+      <div class="me"><div class="avatar-chip" id="userInitials"></div><span id="userNameNav"></span></div>
+    </div>
+  </nav>
+
+  <main class="page room-page">
+    <div class="room-head">
+      <div>
+        <div class="eyebrow">
+          <span class="session-badge" id="sessionBadge"><span class="dot"></span><span id="sessionIdLabel">Initialising…</span></span>
+          <span id="userNameLabel" hidden></span>
+        </div>
+        <h1 class="title">Mock interview</h1>
+        <div class="focus-chip" id="focusChip" hidden></div>
       </div>
-      InterviewAI
-    </div>
-    <div class="topbar-divider"></div>
-    <div class="session-badge" id="sessionBadge">
-      <span class="dot"></span>
-      <span id="sessionIdLabel">Initialising…</span>
-    </div>
-    <!-- User info + logout — pushed to the right -->
-    <div style="margin-left:auto; display:flex; align-items:center; gap:12px;">
-      <span id="userNameLabel" style="font-size:13px; color:var(--text-muted);"></span>
-      <button onclick="logout()" style="
-        padding: 5px 13px;
-        font-family: 'DM Sans', sans-serif;
-        font-size: 12px; font-weight: 500;
-        background: transparent;
-        border: 1.5px solid var(--border2);
-        border-radius: 8px;
-        color: var(--text-muted);
-        cursor: pointer;
-        transition: border-color .15s, color .15s;
-      "
-      onmouseover="this.style.color='var(--danger)';this.style.borderColor='var(--danger)'"
-      onmouseout="this.style.color='var(--text-muted)';this.style.borderColor='var(--border2)'">
-        Sign Out
+      <button class="btn danger" onclick="endInterview()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M15 9l-6 6M9 9l6 6"/></svg>
+        End and see report
       </button>
     </div>
-  </header>
 
-  <!-- ── Sidebar ── -->
-  <aside class="sidebar">
-
-    <!-- Resume upload -->
-    <div class="sidebar-section">
-      <div class="sidebar-label">Your Resume</div>
-      <div class="resume-zone" id="resumeZone" onclick="document.getElementById('resumeFile').click()">
-        <div class="resume-zone-icon">📄</div>
-        <p id="resumeZoneText">Click to upload your resume<br/><small style="font-size:11px;">PDF</small></p>
-        <input type="file" id="resumeFile" accept=".pdf,.doc,.docx" onchange="handleFileSelect()" />
-      </div>
-      <button class="upload-btn" id="uploadBtn" onclick="uploadResume()">Upload Resume</button>
-    </div>
-
-    <!-- Live stats -->
-    <div class="sidebar-section">
-      <div class="sidebar-label">Stats</div>
-      <div class="stats-grid">
-        <div class="stat-card">
-          <div class="stat-card-label">Questions</div>
-          <div class="stat-card-val" id="statQ">0</div>
+    <div class="room">
+      <!-- ── Chat ── -->
+      <section class="panel chat-area">
+        <div class="chat-status-bar" id="chatStatusBar">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 8v4l3 3"/></svg>
+          Upload your resume and start answering questions
         </div>
-        <div class="stat-card">
-          <div class="stat-card-label">Avg Score</div>
-          <div class="stat-card-val" id="statScore">—<span>/10</span></div>
-        </div>
-      </div>
-    </div>
 
-    <!-- Tips -->
-    <div class="sidebar-section" style="flex:1;">
-      <div class="sidebar-label">Quick Tips</div>
-      <div class="tip-item">Upload your resume first</div>
-      <div class="tip-item">You can answer by voice</div>
-      <div class="tip-item">Take a moment to think before answering</div>
-      <div class="tip-item">Be honest for best feedback</div>
-      <div class="tip-item">Click "End Interview" to get your report</div>
-    </div>
-
-    <!-- End interview -->
-    <button class="end-btn" onclick="endInterview()">
-      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M15 9l-6 6M9 9l6 6"/></svg>
-      End Interview & Get Report
-    </button>
-  </aside>
-
-  <!-- ── Chat ── -->
-  <main class="chat-area">
-    <div class="chat-status-bar" id="chatStatusBar">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 8v4l3 3"/></svg>
-      Upload your resume and start answering questions
-    </div>
-
-    <div class="chat-messages" id="chat">
-      <!-- Empty state shown by default -->
-      <div class="empty-state" id="emptyState">
-        <h3>Ready when you are</h3>
-        <p>Upload your resume on the left, then type your first answer or use the mic to speak. The AI will guide you through the interview.</p>
-      </div>
-    </div>
-
-    <!-- Input -->
-    <div class="input-area">
-      <div class="input-row">
-        <div class="input-wrapper">
-          <textarea id="history" rows="1" placeholder="Type your answer here…" oninput="onInputChange(this)"></textarea>
-          <div class="input-toolbar">
-            <button class="record-btn" id="recordBtn" onclick="toggleRecording()">
-              <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 15c1.66 0 3-1.34 3-3V6c0-1.66-1.34-3-3-3S9 4.34 9 6v6c0 1.66 1.34 3 3 3zm5-3c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-2.08c3.39-.49 6-3.39 6-6.92h-2z"/></svg>
-              <span id="recordLabel">Speak</span>
-            </button>
-            <span class="input-spacer"></span>
-            <span class="char-count" id="charCount">0</span>
+        <div class="chat-messages" id="chat">
+          <!-- Empty state shown by default -->
+          <div class="empty-state" id="emptyState">
+            <h3>Ready when you are</h3>
+            <p>Upload your resume on the right, then type your first answer or use the mic to speak. The interview ends on its own once every skill has been assessed, or when you end it.</p>
           </div>
         </div>
-        <button class="send-btn" id="sendBtn" onclick="askAI()" title="Send answer">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-            <line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>
-          </svg>
-        </button>
-      </div>
+
+        <!-- Input -->
+        <div class="input-area">
+          <div class="input-row">
+            <div class="input-wrapper">
+              <textarea id="history" rows="2" placeholder="Type your answer, or press Speak and answer out loud" oninput="onInputChange(this)"></textarea>
+              <div class="input-toolbar">
+                <button class="record-btn" id="recordBtn" onclick="toggleRecording()" type="button">
+                  <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 15c1.66 0 3-1.34 3-3V6c0-1.66-1.34-3-3-3S9 4.34 9 6v6c0 1.66 1.34 3 3 3zm5-3c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-2.08c3.39-.49 6-3.39 6-6.92h-2z"/></svg>
+                  <span id="recordLabel">Speak</span>
+                </button>
+                <span class="kbd-hint">Ctrl + Enter to send</span>
+                <span class="input-spacer"></span>
+                <span class="char-count" id="charCount">0</span>
+              </div>
+            </div>
+            <button class="send-btn" id="sendBtn" onclick="askAI()" title="Send answer" type="button">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>
+              </svg>
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <!-- ── Side panels ── -->
+      <aside class="side-stack">
+        <div class="panel">
+          <div class="panel-h"><h2 class="panel-title">Your resume</h2></div>
+          <div class="resume-zone" id="resumeZone" onclick="document.getElementById('resumeFile').click()">
+            <div class="resume-zone-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M12 18v-6M9 15l3-3 3 3"/></svg>
+            </div>
+            <p id="resumeZoneText">Click to choose your resume<br/><small>PDF</small></p>
+            <input type="file" id="resumeFile" accept=".pdf,.doc,.docx" onchange="handleFileSelect()" />
+          </div>
+          <button class="btn upload-btn" id="uploadBtn" onclick="uploadResume()" type="button">Upload resume</button>
+        </div>
+
+        <div class="panel">
+          <div class="panel-h"><h2 class="panel-title">Skill coverage</h2><span class="hint">Ends when all are settled</span></div>
+          <div class="coverage" id="coverage"></div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-h"><h2 class="panel-title">So far</h2></div>
+          <div class="stats-grid">
+            <div class="stat-card">
+              <div class="stat-card-label">Answered</div>
+              <div class="stat-card-val num" id="statQ">0</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-card-label">Avg score</div>
+              <div class="stat-card-val num" id="statScore">—<span>/10</span></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel tips">
+          <div class="panel-h"><h2 class="panel-title">Quick tips</h2></div>
+          <div class="tip-item">Upload your resume first</div>
+          <div class="tip-item">Take a moment to think before answering</div>
+          <div class="tip-item">Use concrete examples and numbers</div>
+          <div class="tip-item">Be honest for the most useful feedback</div>
+        </div>
+      </aside>
     </div>
   </main>
-
 </div>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="script.js"></script>

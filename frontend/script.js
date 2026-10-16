@@ -35,6 +35,9 @@ window.onload = async() => {
   // Show the user's name in the topbar
   const name = currentUser.user_metadata?.full_name || currentUser.email.split("@")[0];
   document.getElementById("userNameLabel").textContent = name;
+  document.getElementById("userNameNav").textContent = name;
+  document.getElementById("userInitials").textContent =
+    name.split(/[\s._-]+/).filter(Boolean).slice(0, 2).map((p) => p[0].toUpperCase()).join("");
   // Keep accessToken fresh if Supabase refreshes the session in the background
   sb.auth.onAuthStateChange((_event, newSession) => {
     if (newSession) {
@@ -45,6 +48,7 @@ window.onload = async() => {
     }
   }); 
 
+  renderCoverage(null);
   await startSession();
   // Auto-resize textarea
   const ta = document.getElementById("history");
@@ -84,7 +88,18 @@ function authHeaders(extra = {}) {
 
 async function startSession() {
   try {
-    const res = await fetch(`${API_BASE}/start_interview`, { method: "POST",headers: authHeaders() });
+    // A practice interview from the dashboard passes its topic as ?focus=
+    const focus = new URLSearchParams(window.location.search).get("focus");
+    if (focus) {
+      const chip = document.getElementById("focusChip");
+      chip.textContent = "Practice focus: " + focus;
+      chip.hidden = false;
+    }
+    const res = await fetch(`${API_BASE}/start_interview`, {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ focus_topic: focus || null }),
+    });
     const data = await res.json();
     if (data.error) throw new Error(data.error);
 
@@ -183,6 +198,7 @@ async function askAI() {
       addAIMessage(data.question);
       // Add feedback card
       addFeedbackCard(data.feedback, data.score);
+      if (data.skill_state) renderCoverage(data.skill_state, data.target_skill);
 
       // Update stats — only for answers the server counts towards the final report
       // (not the opening turn or unparseable AI responses), so the numbers match the report.
@@ -400,9 +416,39 @@ function addReportCard(data) {
       <div style="font-size:10.5px; font-weight:600; letter-spacing:.8px; text-transform:uppercase; color:var(--accent-dark); margin-bottom:6px;">Areas to Improve</div>
       <div style="font-size:13.5px; color:var(--text-primary); line-height:1.65;">${escHtml(data.improvements)}</div>
     </div>
+
+    <div class="report-actions">
+      ${data.interview_id ? `<a class="btn primary" href="report.html?id=${encodeURIComponent(data.interview_id)}">Open full report</a>` : ""}
+      <a class="btn" href="dashboard.html">Back to dashboard</a>
+    </div>
   `;
   chat.appendChild(card);
   scrollToBottom();
+}
+
+// ── Skill coverage panel ──────────────────────────────────────────────────────
+// Shows how many scored answers each rubric skill has (the server's evaluation state),
+// out of the 2 needed to settle it, and which skill the next question assesses.
+const COVERAGE_SKILLS = [
+  ["communication", "Communication"],
+  ["technical_depth", "Technical depth"],
+  ["problem_solving", "Problem solving"],
+  ["project_experience", "Project experience"],
+];
+const EVIDENCE_NEEDED = 2;   // MIN_EVIDENCE_PER_SKILL in services/rubric.py
+
+function renderCoverage(state, nextSkill) {
+  const el = document.getElementById("coverage");
+  if (!el) return;
+  el.innerHTML = COVERAGE_SKILLS.map(([key, label]) => {
+    const entry = (state && state[key]) || { count: 0, avg: 0 };
+    const settled = entry.count >= EVIDENCE_NEEDED || (entry.count >= 1 && (entry.avg <= 3 || entry.avg >= 8));
+    const cls = settled ? "done" : key === nextSkill ? "next" : "";
+    const status = settled ? "settled" : key === nextSkill ? "next" : `${entry.count}/${EVIDENCE_NEEDED}`;
+    const dots = Array.from({ length: EVIDENCE_NEEDED }, (_, i) =>
+      `<i class="${i < Math.min(entry.count, EVIDENCE_NEEDED) || settled ? "on" : ""}"></i>`).join("");
+    return `<div class="cov-row ${cls}"><span>${label}</span><span class="state">${status}</span><div class="dots">${dots}</div></div>`;
+  }).join("");
 }
 
 function addTypingIndicator() {

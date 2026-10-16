@@ -1,19 +1,6 @@
+/* Sign-in page. Colours come from theme.css so it matches the rest of the app. */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-    :root {
-      --accent:      #0ea5e9;
-      --accent-dark: #0369a1;
-      --success:     #10b981;
-      --danger:      #ef4444;
-      --bg:          #e8f4fd;
-      --surface:     #ffffff;
-      --surface2:    #f0f8ff;
-      --border:      #bae6fd;
-      --border2:     #e0f2fe;
-      --text-primary:   #0c4a6e;
-      --text-secondary: #0369a1;
-      --text-muted:     #64748b;
-    }
-    body {
+        body {
       font-family: 'DM Sans', sans-serif;
       background: var(--bg);
       color: var(--text-primary);
@@ -50,7 +37,7 @@
       background: var(--accent); border-radius: 8px;
       display: grid; place-items: center;
     }
-    .logo-dot svg { width: 16px; height: 16px; fill: white; }
+    .logo-dot svg { width: 16px; height: 16px; fill: var(--accent-ink); }
     .tagline { font-size: 13px; color: var(--text-muted); margin-bottom: 28px; }
     .tabs {
       display: flex;
@@ -88,7 +75,7 @@
     input::placeholder { color: var(--text-muted); opacity: .5; }
     .submit-btn {
       width: 100%; margin-top: 6px; padding: 12px;
-      background: var(--accent); color: white;
+      background: var(--accent); color: var(--accent-ink);
       border: none; border-radius: 10px;
       font-family: 'DM Sans', sans-serif;
       font-size: 15px; font-weight: 600; cursor: pointer;
@@ -102,7 +89,7 @@
     .spinner {
       width: 16px; height: 16px;
       border: 2px solid rgba(255,255,255,.35);
-      border-top-color: white; border-radius: 50%;
+      border-top-color: var(--accent-ink); border-radius: 50%;
       animation: spin .65s linear infinite; display: none;
     }
     @keyframes spin { to { transform: rotate(360deg); } }

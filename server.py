@@ -3,7 +3,7 @@ from fastapi import Header, HTTPException, Depends
 from services.llmcalling import llmcalling
 from services.pdfreading import extract_text_pymupdf
 from services.llmfeedback import llmfeedback
-from services.rubric import RUBRIC_VERSION, rubric_text, empty_state, normalize_state, add_score, pick_target_skill, should_stop
+from services.rubric import RUBRIC_VERSION, SKILLS, rubric_text, empty_state, normalize_state, add_score, pick_target_skill, should_stop
 from services.stt import sst
 from pydantic import BaseModel # For defining data models for request and response bodies in FastAPI.
 import os
@@ -65,9 +65,8 @@ async def get_current_user(authorization: Optional[str] = Header(None)):
 # and raises 403 if the interview belongs to a different user.
 def load_session(session_id, user):
     try:
-        response = supabase.table("interviews").select(
-            "id, user_id, resume_text, history, evaluation_state, completed"
-        ).eq("id", session_id).limit(1).execute()
+        # select * so optional columns (focus_topic) don't break loading before their migration is run
+        response = supabase.table("interviews").select("*").eq("id", session_id).limit(1).execute()
     except Exception as e:
         print(f"error loading session {session_id}: {e}")
         return None
@@ -82,6 +81,7 @@ def load_session(session_id, user):
         "history": row.get("history") or [],
         "evaluation_state": normalize_state(row.get("evaluation_state")),   # old flat-shaped states reset to zero counts
         "completed": row.get("completed") or False,
+        "focus_topic": row.get("focus_topic"),
         "interview_id": row["id"]
     }
 
@@ -142,22 +142,31 @@ async def upload_resume(session_id: str, file: fastapi.UploadFile = fastapi.File
 
     return {"extracted_text": text}
 
+# StartRequest is the optional body of /start_interview.
+# focus_topic is set when the user starts a practice interview from a suggested topic on the dashboard.
+class StartRequest(BaseModel):
+    focus_topic: Optional[str] = None
+
 # The /start_interview endpoint is responsible for initiating a new interview session.
 # When a client makes a POST request to this endpoint, we create a new row in the interviews table
 # with an empty history and evaluation state, and return its id as the session ID.
 @app.post("/start_interview")
-async def start_interview(user=Depends(get_current_user)):
+async def start_interview(request: Optional[StartRequest] = None, user=Depends(get_current_user)):
     #user_id = str(uuid.uuid4())  # Generate a unique user ID for the interview session
     user_id = user.id
+    row={
+        "user_id": user_id,
+        "role": "candidate",
+        "status": "active",
+        "history": [],
+        "evaluation_state": empty_state(),   # {skill: {"count", "avg"}}, kept by the server
+        "completed":False
+    }
+    focus_topic=(request.focus_topic or "").strip()[:120] if request else ""
+    if focus_topic:
+        row["focus_topic"]=focus_topic       # needs migrations/004_dashboard.sql
     try:
-        response=supabase.table("interviews").insert({
-            "user_id": user_id,
-            "role": "candidate",
-            "status": "active",
-            "history": [],
-            "evaluation_state": empty_state(),   # {skill: {"count", "avg"}}, kept by the server
-            "completed":False
-        }).execute()
+        response=supabase.table("interviews").insert(row).execute()
     except Exception as e:
         return {"error": f"Failed to create interview session in the database: {e}"}
     
@@ -215,7 +224,7 @@ async def interview(request: InterviewRequest, user=Depends(get_current_user)):
         target_skill="communication"         # the intro question
 
     started=time.perf_counter()
-    res=llmcalling(context,user_answer,history,rubric_text(),assessed_skill,target_skill)
+    res=llmcalling(context,user_answer,history,rubric_text(),assessed_skill,target_skill,session.get("focus_topic"))
     latency_ms=int((time.perf_counter()-started)*1000)
     cleaned=re.sub(r"```json|```", "", res).strip()
     try:
@@ -272,8 +281,10 @@ async def interview(request: InterviewRequest, user=Depends(get_current_user)):
     save_session(session)   # persist history/evaluation state so the interview survives restarts
     print(f"Session {request.session_id} history: {history}")
     # Tell the frontend whether this answer counts towards the score (same rule as answered_turns),
+    # and the per-skill evidence for the coverage panel,
     # on a copy so it isn't stored in history and doesn't end up in the LLM prompt.
-    return {**parsed, "counted": bool(asked_question) and parse_ok}
+    return {**parsed, "counted": bool(asked_question) and parse_ok,
+            "skill_state": evaluation_state, "target_skill": target_skill}
 
 
 # answered_turns pairs each answer with the question it actually responds to.
@@ -294,7 +305,9 @@ def answered_turns(history):
             "question": question,
             "answer": entry["user"],
             "score": entry["ai"].get("score",0),
-            "feedback": entry["ai"].get("feedback","")
+            "feedback": entry["ai"].get("feedback",""),
+            "assessed_skill": entry.get("assessed_skill"),
+            "justification": entry["ai"].get("justification","")
         })
     return turns
 
@@ -319,7 +332,7 @@ async def end_interview(request: InterviewRequest, user=Depends(get_current_user
     avg_score=round((sum(scores)/len(scores)),2) if scores else 0
 
     #change to llm feedbacking
-    feedbackdata=llmfeedback(turns)
+    feedbackdata=llmfeedback(turns, SKILLS)
     cleaned=re.sub(r"```json|```", "", feedbackdata).strip()
     try:
         parsed=json.loads(cleaned)
@@ -330,19 +343,28 @@ async def end_interview(request: InterviewRequest, user=Depends(get_current_user
             "improvements":"Could not parse response"
         }
 
+    weak_topics=clean_topics(parsed.get("weak_topics"), "topic")
+    suggested_topics=clean_topics(parsed.get("suggested_topics"), "title")
+
     # chat_history rows are saved per turn in /interview, so there's nothing to bulk insert here.
+    report_row={
+        "interview_id": session["interview_id"],
+        "avg_score": avg_score,
+        "rubric_version": RUBRIC_VERSION,
+        "skill_scores": session["evaluation_state"],
+        "llm_score": parsed.get("score",0),
+        "feedback": parsed.get("feedback","No feedback provided"),
+        "improvements": parsed.get("improvements","No improvements provided"),
+    }
     try:
-        supabase.table("reports").insert({
-            "interview_id": session["interview_id"],
-            "avg_score": avg_score,
-            "rubric_version": RUBRIC_VERSION,
-            "skill_scores": session["evaluation_state"],
-            "llm_score": parsed.get("score",0),
-            "feedback": parsed.get("feedback","No feedback provided"),
-            "improvements": parsed.get("improvements","No improvements provided"),
-    }).execute()
+        supabase.table("reports").insert({**report_row, "weak_topics": weak_topics, "suggested_topics": suggested_topics}).execute()
     except Exception as e:
-        print(f"error saving report to database: {e}")
+        # most likely migrations/004_dashboard.sql hasn't been run yet, so save the report without the topic columns
+        print(f"error saving report with topics, retrying without them: {e}")
+        try:
+            supabase.table("reports").insert(report_row).execute()
+        except Exception as e:
+            print(f"error saving report to database: {e}")
 
 
     try:
@@ -361,7 +383,169 @@ async def end_interview(request: InterviewRequest, user=Depends(get_current_user
         "feedback":parsed.get("feedback","No feedback provided"),
         "improvements":parsed.get("improvements","No improvements provided"),
         "skill_scores":session["evaluation_state"],
+        "weak_topics":weak_topics,
+        "suggested_topics":suggested_topics,
+        "interview_id":session["interview_id"],
         "status":"interview completed"
+    }
+
+
+# clean_topics keeps the well-formed entries of the LLM's weak/suggested topic lists (at most 3),
+# so the dashboard never has to deal with missing keys or unknown skills.
+def clean_topics(items, name_key):
+    cleaned=[]
+    if not isinstance(items, list):
+        return cleaned
+    for item in items:
+        if not isinstance(item, dict) or not str(item.get(name_key) or "").strip():
+            continue
+        skill=item.get("skill") if item.get("skill") in SKILLS else None
+        cleaned.append({name_key: str(item[name_key]).strip(), "skill": skill, "why": str(item.get("why") or "").strip()})
+    return cleaned[:3]
+
+
+# ── DASHBOARD & REPORTS ───────────────────────────────────────────────────────
+# interview_time is the best timestamp we have for a finished interview, used for sorting and display.
+def interview_time(interview, report):
+    return (interview.get("ended_at") or (report or {}).get("created_at") or interview.get("created_at") or "")
+
+# skill_avg returns a skill's average from a report's skill_scores, or None if it wasn't assessed.
+def skill_avg(skill_scores, skill):
+    entry=(skill_scores or {}).get(skill)
+    if isinstance(entry, dict) and entry.get("count"):
+        return round(float(entry.get("avg", 0)), 2)
+    return None
+
+def mean(values):
+    values=[v for v in values if v is not None]
+    return round(sum(values)/len(values), 2) if values else None
+
+# finished_interviews returns the user's interviews that have a report, oldest first,
+# each with its report merged in: [{"interview": row, "report": row}, ...]
+def finished_interviews(user_id):
+    interviews=supabase.table("interviews").select("*").eq("user_id", user_id).execute().data or []
+    ids=[row["id"] for row in interviews]
+    reports=supabase.table("reports").select("*").in_("interview_id", ids).execute().data if ids else []
+    by_interview={}
+    for report in reports or []:
+        by_interview[report["interview_id"]]=report    # one report per interview, the last one wins
+    finished=[{"interview": row, "report": by_interview[row["id"]]} for row in interviews if row["id"] in by_interview]
+    finished.sort(key=lambda item: interview_time(item["interview"], item["report"]))
+    return finished
+
+def summarize(item):
+    interview, report=item["interview"], item["report"]
+    skill_scores=report.get("skill_scores") or {}
+    return {
+        "interview_id": interview["id"],
+        "date": interview_time(interview, report),
+        "avg_score": report.get("avg_score"),
+        "llm_score": report.get("llm_score"),
+        "questions": sum(int((skill_scores.get(skill) or {}).get("count", 0)) for skill in SKILLS),
+        "skills": {skill: skill_avg(skill_scores, skill) for skill in SKILLS},
+        "focus_topic": interview.get("focus_topic"),
+    }
+
+
+# /dashboard returns everything the home page shows: past interviews, per-skill trend,
+# current skill levels, weak topics and suggested practice topics.
+@app.get("/dashboard")
+async def dashboard(user=Depends(get_current_user)):
+    try:
+        finished=finished_interviews(user.id)
+    except Exception as e:
+        print(f"error loading dashboard: {e}")
+        raise HTTPException(status_code=500, detail="Could not load your interviews")
+
+    interviews=[summarize(item) for item in finished]
+
+    # Skill level now = average over the last 3 interviews that assessed it, delta = vs the 3 before those.
+    skills_now={}
+    for skill in SKILLS:
+        values=[row["skills"][skill] for row in interviews if row["skills"][skill] is not None]
+        now, before=mean(values[-3:]), mean(values[-6:-3])
+        first=values[0] if values else None
+        skills_now[skill]={
+            "avg": now,
+            "delta": round(now-before, 2) if now is not None and before is not None else None,
+            "since_first": round(values[-1]-first, 2) if len(values)>1 else None,
+        }
+
+    # Weak topics come from the last 5 reports, grouped by name, most frequent first.
+    weak={}
+    for item in finished[-5:]:
+        for topic in item["report"].get("weak_topics") or []:
+            key=topic.get("topic","").strip().lower()
+            if not key:
+                continue
+            entry=weak.setdefault(key, {**topic, "count": 0, "last_seen": interview_time(item["interview"], item["report"])})
+            entry["count"]+=1
+            entry["why"]=topic.get("why") or entry["why"]     # keep the most recent explanation
+    weak_topics=sorted(weak.values(), key=lambda t: t["last_seen"], reverse=True)   # newest first among ties
+    weak_topics=sorted(weak_topics, key=lambda t: t["count"], reverse=True)[:5]
+
+    # Older reports have no weak topics, so fall back to the lowest-scored answers.
+    low_answers=[]
+    if not weak_topics and finished:
+        ids=[item["interview"]["id"] for item in finished[-5:]]
+        try:
+            rows=supabase.table("chat_history").select("question, score, assessed_skill, justification, interview_id") \
+                .in_("interview_id", ids).lt("score", 5).execute().data or []
+            low_answers=sorted(rows, key=lambda r: r.get("score") or 0)[:5]
+        except Exception as e:
+            print(f"error loading low answers: {e}")
+
+    # Suggestions come from the most recent report that has them.
+    suggested=next((item["report"]["suggested_topics"] for item in reversed(finished) if item["report"].get("suggested_topics")), [])
+
+    return {
+        "skills": SKILLS,
+        "interviews": interviews,
+        "skills_now": skills_now,
+        "weak_topics": weak_topics,
+        "low_answers": low_answers,
+        "suggested_topics": suggested,
+    }
+
+
+# /reports/{interview_id} returns one finished interview: its report, every scored answer,
+# and the previous interview's skill averages for comparison.
+@app.get("/reports/{interview_id}")
+async def get_report(interview_id: str, user=Depends(get_current_user)):
+    try:
+        finished=finished_interviews(user.id)    # only the user's own interviews, so this is also the ownership check
+    except Exception as e:
+        print(f"error loading report {interview_id}: {e}")
+        raise HTTPException(status_code=500, detail="Could not load this report")
+    index=next((i for i, item in enumerate(finished) if item["interview"]["id"]==interview_id), None)
+    if index is None:
+        raise HTTPException(status_code=404, detail="Report not found")
+    item=finished[index]
+    report=item["report"]
+    try:
+        answers=supabase.table("chat_history").select("*").eq("interview_id", interview_id).execute().data or []
+    except Exception as e:
+        print(f"error loading answers for {interview_id}: {e}")
+        answers=[]
+    answers.sort(key=lambda r: (r.get("turn_index") or 0, r.get("created_at") or ""))
+    return {
+        **summarize(item),
+        "feedback": report.get("feedback"),
+        "improvements": report.get("improvements"),
+        "weak_topics": report.get("weak_topics") or [],
+        "suggested_topics": report.get("suggested_topics") or [],
+        "previous": summarize(finished[index-1]) if index>0 else None,
+        "number": index+1,
+        "total": len(finished),
+        "answers": [{
+            "question": r.get("question"),
+            "answer": r.get("answer"),
+            "score": r.get("score"),
+            "band": r.get("band"),
+            "skill": r.get("assessed_skill"),
+            "feedback": r.get("feedback"),
+            "justification": r.get("justification"),
+        } for r in answers],
     }
 
 

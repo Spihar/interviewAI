@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=DM+Mono:wght@400;500&family=Fraunces:opsz,wght@9..144,500;9..144,600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="theme.css" />
+  <script src="theme.js"></script>
+  <title>InterviewAI · Dashboard</title>
+  <link rel="stylesheet" href="dashboard.css" />
+</head>
+<body>
+<div class="shell">
+  <nav class="nav" aria-label="Main">
+    <a class="brand" href="dashboard.html"><i>AI</i>InterviewAI</a>
+    <a class="nav-link" href="dashboard.html" data-nav="dashboard" aria-current="page"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg><span>Dashboard</span></a>
+    <a class="nav-link" href="index.html" data-nav="interview"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg><span>New interview</span></a>
+    <div class="nav-foot">
+      <button class="nav-link" data-theme-toggle type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg><span>Dark mode</span></button>
+      <button class="nav-link" onclick="logout()" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/></svg><span>Sign out</span></button>
+      <div class="me"><div class="avatar-chip" data-user-initials></div><span data-user-name></span></div>
+    </div>
+  </nav>
+  <main class="page">
+    <section class="wrap">
+      <div class="head">
+        <div>
+          <div class="eyebrow" id="today"></div>
+          <h1 class="title">Welcome back, <span data-user-name></span></h1>
+          <p class="sub" id="headline">Loading your interviews…</p>
+        </div>
+        <div class="head-actions">
+          <a class="btn" id="practiceWeakBtn" href="index.html" hidden>Practice weak topics</a>
+          <a class="btn primary" href="index.html">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 5v14M5 12h14"/></svg>Start new interview</a>
+        </div>
+      </div>
+
+      <div class="alert-bar" id="errorBar" hidden></div>
+
+      <!-- First-time users see this instead of the stats -->
+      <div class="panel welcome" id="welcome" hidden>
+        <div class="eyebrow">Get started</div>
+        <h2>Your first mock interview</h2>
+        <p>Upload your resume and answer 5 to 12 questions. Each answer is scored on communication, technical depth, problem solving and project experience. After each interview this page shows your progress, weak topics and what to practise next.</p>
+        <a class="btn primary" href="index.html">Start your first interview</a>
+      </div>
+
+      <div id="stats" class="wrap" style="gap:20px;width:100%">
+        <div class="kpis" id="kpis">
+          <div class="kpi"><div class="skeleton" style="height:60px"></div></div>
+          <div class="kpi"><div class="skeleton" style="height:60px"></div></div>
+          <div class="kpi"><div class="skeleton" style="height:60px"></div></div>
+          <div class="kpi"><div class="skeleton" style="height:60px"></div></div>
+        </div>
+
+        <div class="grid g-2-1">
+          <div class="panel">
+            <div class="panel-h"><h2 class="panel-title">Skill trend</h2><span class="hint">Average score per skill, each interview</span></div>
+            <div class="legend" id="legend"></div>
+            <div class="chart-box" id="chartBox"><svg class="chart" id="trend" viewBox="0 0 640 240" role="img" aria-label="Skill scores across your interviews"></svg></div>
+          </div>
+          <div class="panel">
+            <div class="panel-h"><h2 class="panel-title">Skills now</h2><span class="hint">Last 3 interviews</span></div>
+            <div class="skills" id="skillsNow"></div>
+          </div>
+        </div>
+
+        <div class="grid g-1-1">
+          <div class="panel">
+            <div class="panel-h"><h2 class="panel-title">Weak topics</h2><span class="hint" id="weakHint">From your last 5 interviews</span></div>
+            <div class="list" id="weakTopics"></div>
+          </div>
+          <div class="panel">
+            <div class="panel-h"><h2 class="panel-title">Since your first interview</h2><span class="hint">Change in each skill</span></div>
+            <div class="list" id="improved"></div>
+          </div>
+        </div>
+
+        <div class="panel" id="suggestPanel">
+          <div class="panel-h"><h2 class="panel-title">Suggested practice</h2><span class="hint">Each starts an interview focused on that topic</span></div>
+          <div class="sugg" id="suggested"></div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-h"><h2 class="panel-title">Past interviews</h2><span class="hint">Click a row to open its report</span></div>
+          <div class="table-wrap"><table>
+            <thead><tr><th>Date</th><th>Questions</th><th>Score</th><th>Weakest skill</th><th>Focus</th></tr></thead>
+            <tbody id="historyRows"></tbody>
+          </table></div>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="common.js"></script>
+<script src="dashboard.js"></script>
+</body>
+</html>

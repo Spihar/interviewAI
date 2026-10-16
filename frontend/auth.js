@@ -10,13 +10,13 @@ const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON);
   // If yes — skip this page, go straight to the app.
   window.onload = async () => {
     const { data: { session } } = await sb.auth.getSession();
-    if (session) window.location.href = "index.html";
+    if (session) window.location.href = "dashboard.html";
   };
 
   // This fires when Google OAuth redirects back to this page.
   // Supabase parses the token from the URL automatically.
   sb.auth.onAuthStateChange((_event, session) => {
-    if (session) window.location.href = "index.html";
+    if (session) window.location.href = "dashboard.html";
   });
 
   function switchTab(tab) {
@@ -50,7 +50,7 @@ const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON);
         // The SDK saves this token to localStorage automatically.
         const { error } = await sb.auth.signInWithPassword({ email, password });
         if (error) { showAlert(error.message, "error"); setLoading(false); return; }
-        // onAuthStateChange above fires → redirects to index.html
+        // onAuthStateChange above fires → redirects to dashboard.html
 
       } else {
         // Creates user in Supabase Auth.
@@ -85,7 +85,7 @@ const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON);
     // Supabase Dashboard → Authentication → Providers → Google
     const { error } = await sb.auth.signInWithOAuth({
       provider: "google",
-      options: { redirectTo: window.location.origin + "/index.html" }
+      options: { redirectTo: window.location.origin + "/dashboard.html" }
     });
     if (error) showAlert(error.message, "error");
   }

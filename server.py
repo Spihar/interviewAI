@@ -453,12 +453,17 @@ def mean(values):
 # each with its report merged in: [{"interview": row, "report": row}, ...]
 def finished_interviews(user_id):
     # Only the columns the dashboard needs, not every interview's history and resume.
-    # focus_topic comes from migrations/004_dashboard.sql, so load without it if that hasn't been run yet.
-    try:
-        interviews=supabase.table("interviews").select("id, created_at, ended_at, focus_topic").eq("user_id", user_id).execute().data or []
-    except Exception as e:
-        print(f"error loading interviews with focus_topic, retrying without it: {e}")
-        interviews=supabase.table("interviews").select("id, created_at, ended_at").eq("user_id", user_id).execute().data or []
+    # focus_topic comes from migrations/004_dashboard.sql, and created_at may not exist on older tables,
+    # so fall back to fewer columns, and to * as a last resort, instead of failing the whole dashboard.
+    interviews=None
+    for columns in ("id, created_at, ended_at, focus_topic", "id, created_at, ended_at", "*"):
+        try:
+            interviews=supabase.table("interviews").select(columns).eq("user_id", user_id).execute().data or []
+            break
+        except Exception as e:
+            print(f"error loading interviews with columns '{columns}': {e}")
+    if interviews is None:
+        raise RuntimeError("could not load interviews")
     ids=[row["id"] for row in interviews]
     reports=supabase.table("reports").select("*").in_("interview_id", ids).execute().data if ids else []
     by_interview={}

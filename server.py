@@ -16,11 +16,9 @@ from typing import Optional
 from datetime import datetime, timezone
 from db import supabase
 
-interview_sessions = {} 
-# A dictionary to store interview sessions, 
-# where each session is identified by a unique session ID.
-# This allows us to manage multiple interview sessions concurrently, 
-# keeping track of the context and history for each session separately.
+# Interview sessions are stored in the interviews table (history, evaluation_state, completed),
+# and the interviews row id is used as the session ID.
+# This keeps interviews alive across server restarts instead of losing them from memory.
 
 
 app = fastapi.FastAPI()
@@ -55,7 +53,50 @@ async def get_current_user(authorization: Optional[str] = Header(None)):
         return response.user
     except Exception as e:
         raise HTTPException(status_code=401, detail=f"Auth error: {str(e)}")
-    
+
+
+# ── SESSION STORAGE ───────────────────────────────────────────────────────────
+# load_session reads the interview row for the given session ID and returns it shaped like a session dict.
+# Returns None if the session doesn't exist (or the ID isn't a valid UUID),
+# and raises 403 if the interview belongs to a different user.
+def load_session(session_id, user):
+    try:
+        response = supabase.table("interviews").select(
+            "id, user_id, resume_text, history, evaluation_state, completed"
+        ).eq("id", session_id).limit(1).execute()
+    except Exception as e:
+        print(f"error loading session {session_id}: {e}")
+        return None
+    if not response or not response.data:
+        return None
+    row = response.data[0]
+    if row["user_id"] != user.id:                      # ownership check
+        raise HTTPException(status_code=403, detail="Unauthorized")
+    return {
+        "user_id": row["user_id"],
+        "context": row.get("resume_text") or "",
+        "history": row.get("history") or [],
+        "evaluation_state": row.get("evaluation_state") or {
+            "technical_depth":0,
+            "communication":0,
+            "problem_solving":0,
+            "project_experience":0
+        },
+        "completed": row.get("completed") or False,
+        "interview_id": row["id"]
+    }
+
+# save_session writes the session's history, evaluation state and completed flag back to the interviews row.
+def save_session(session):
+    try:
+        supabase.table("interviews").update({
+            "history": session["history"],
+            "evaluation_state": session["evaluation_state"],
+            "completed": session["completed"]
+        }).eq("id", session["interview_id"]).execute()
+    except Exception as e:
+        print(f"error saving session {session['interview_id']}: {e}")
+
 
 @app.get("/")
 async def read_root():
@@ -64,22 +105,17 @@ async def read_root():
 @app.post("/upload_resume")
 async def upload_resume(session_id: str, file: fastapi.UploadFile = fastapi.File(...), user=Depends(get_current_user)):
 
-    session = interview_sessions.get(session_id)
-    # We first check if the provided session_id exists in our interview_sessions dictionary.
+    session = load_session(session_id, user)
+    # We first check if the provided session_id exists in the interviews table.
     # If it doesn't exist, we return an error response indicating that the session ID is invalid.
-    if not session:                                 
-        return {"error": "Invalid session ID"}
-    # Next, we verify that the user making the request is the same user associated with the interview session.
-    # If the user IDs do not match, we raise an HTTP 403 Forbidden error, indicating that the user is unauthorized to upload a resume for this session.
-    if session["user_id"] != user.id:
-        raise HTTPException(status_code=403, detail="Unauthorized")
-    
-    # We also check if the interview session has been properly initialized in the database by verifying that the interview_id exists in the session data.
-    interview_id=session.get("interview_id") 
-    # We check if the provided session_id exists in our interview_sessions dictionary.
+    # load_session also verifies that the user making the request owns the interview session,
+    # raising an HTTP 403 Forbidden error if they don't.
     if not session:
         return {"error": "Invalid session ID"}
-    
+
+    # We also check if the interview session has been properly initialized in the database by verifying that the interview_id exists in the session data.
+    interview_id=session.get("interview_id")
+
 
     if not interview_id:
         return {"error": "Interview session not properly initialized in the database"}
@@ -94,7 +130,7 @@ async def upload_resume(session_id: str, file: fastapi.UploadFile = fastapi.File
     text = extract_text_pymupdf(file_location)
     os.remove(file_location)  # Clean up the temporary file
 
-    # We store the extracted text in the session's context for later use during the interview process.
+    # We store the extracted text as the interview's resume_text, which load_session uses as the session's context.
     session["context"] = text
     print(f"Extracted text for session {session_id}: {text}")
     
@@ -108,45 +144,39 @@ async def upload_resume(session_id: str, file: fastapi.UploadFile = fastapi.File
     return {"extracted_text": text}
 
 # The /start_interview endpoint is responsible for initiating a new interview session.
-# When a client makes a POST request to this endpoint, we generate a unique session ID using the uuid library,
-# create a new entry in the interview_sessions dictionary with an empty context and history,
+# When a client makes a POST request to this endpoint, we create a new row in the interviews table
+# with an empty history and evaluation state, and return its id as the session ID.
 @app.post("/start_interview")
 async def start_interview(user=Depends(get_current_user)):
-    session_id = str(uuid.uuid4()) # Generate a unique session ID for the interview session
     #user_id = str(uuid.uuid4())  # Generate a unique user ID for the interview session
     user_id = user.id
     try:
         response=supabase.table("interviews").insert({
             "user_id": user_id,
             "role": "candidate",
-            "status": "active"
+            "status": "active",
+            "history": [],
+            "evaluation_state":{
+                "technical_depth":0,
+                "communication":0,
+                "problem_solving":0,
+                "project_experience":0
+            },
+            "completed":False
         }).execute()
     except Exception as e:
         return {"error": f"Failed to create interview session in the database: {e}"}
     
     if not response.data or len(response.data) == 0:
         return {"error": "Failed to create interview session in the database: No data returned"}
-    # Generate a unique session ID using uuid4, which creates a random UUID
 
     interview_id=response.data[0]["id"] if response.data else None
 
     if not interview_id:
         return {"error": "Failed to create interview session in the database"}
 
-    interview_sessions[session_id] = {
-        "user_id": user_id,
-        "context": "",
-        "history": [],
-        "evaluation_state":{
-            "technical_depth":0,
-            "communication":0,
-            "problem_solving":0,
-            "project_experience":0
-        },
-        "completed":False,
-        "interview_id": interview_id # Store the interview ID from the database in the session data for later reference
-    }
-    return {"session_id": session_id}
+    # The interview ID from the database is used as the session ID
+    return {"session_id": interview_id}
 
 # We define a Pydantic model called InterviewRequest to represent 
 # the expected structure of the request body for the /interview endpoint.
@@ -159,13 +189,11 @@ class InterviewRequest(BaseModel):
 @app.post("/interview")
 async def interview(request: InterviewRequest, user=Depends(get_current_user)):
 
-    session = interview_sessions.get(request.session_id)
+    session = load_session(request.session_id, user)   # also does the ownership check
     if not session:
         return {"error": "Invalid session ID"}
     if session["completed"]:
         return {"error": "Interview already ended"}
-    if session["user_id"] != user.id:                  # ownership check
-        raise HTTPException(status_code=403, detail="Unauthorized")
 
     
     # We retrieve the context and history for the given session ID, 
@@ -200,13 +228,14 @@ async def interview(request: InterviewRequest, user=Depends(get_current_user)):
         history.append({ "user": user_answer, "ai": parsed })
     
     
+    save_session(session)   # persist history/evaluation state so the interview survives restarts
     print(f"Session {request.session_id} history: {history}")
     return parsed
 
 
 @app.post("/end_interview")
 async def end_interview(request: InterviewRequest, user=Depends(get_current_user)):
-    session = interview_sessions.get(request.session_id)
+    session = load_session(request.session_id, user)   # also does the ownership check
     if not session:
         return {"error": "Invalid session ID"}
     history =session["history"]
@@ -261,6 +290,7 @@ async def end_interview(request: InterviewRequest, user=Depends(get_current_user
     try:
         supabase.table("interviews").update({
             "status": "completed",
+            "completed": True,
             "ended_at": datetime.now(timezone.utc).isoformat()
             }).eq("id", session["interview_id"]).execute()
     except Exception as e:

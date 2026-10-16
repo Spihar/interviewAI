@@ -3,6 +3,7 @@ from fastapi import Header, HTTPException, Depends
 from services.llmcalling import llmcalling
 from services.pdfreading import extract_text_pymupdf
 from services.llmfeedback import llmfeedback
+from services.rubric import RUBRIC_VERSION, rubric_text, empty_state, normalize_state, add_score, pick_target_skill, should_stop
 from services.stt import sst
 from pydantic import BaseModel # For defining data models for request and response bodies in FastAPI.
 import os
@@ -79,12 +80,7 @@ def load_session(session_id, user):
         "user_id": row["user_id"],
         "context": row.get("resume_text") or "",
         "history": row.get("history") or [],
-        "evaluation_state": row.get("evaluation_state") or {
-            "technical_depth":0,
-            "communication":0,
-            "problem_solving":0,
-            "project_experience":0
-        },
+        "evaluation_state": normalize_state(row.get("evaluation_state")),   # old flat-shaped states reset to zero counts
         "completed": row.get("completed") or False,
         "interview_id": row["id"]
     }
@@ -159,12 +155,7 @@ async def start_interview(user=Depends(get_current_user)):
             "role": "candidate",
             "status": "active",
             "history": [],
-            "evaluation_state":{
-                "technical_depth":0,
-                "communication":0,
-                "problem_solving":0,
-                "project_experience":0
-            },
+            "evaluation_state": empty_state(),   # {skill: {"count", "avg"}}, kept by the server
             "completed":False
         }).execute()
     except Exception as e:
@@ -210,32 +201,49 @@ async def interview(request: InterviewRequest, user=Depends(get_current_user)):
     # The question this answer responds to is the one the AI asked in the previous turn
     # (parsed["question"] below is the NEXT question, while parsed["score"]/["feedback"] grade THIS answer).
     asked_question=history[-1]["ai"].get("question","") if history else ""
+
+    # The server, not the LLM, decides which skill each question assesses.
+    # The answer is assessed on the skill its question was asked for (the intro question is communication).
+    # The next question targets the skill with the least evidence, counting this answer.
+    if asked_question:
+        assessed_skill=history[-1].get("target_skill") or "communication"
+        projected={skill: dict(entry) for skill, entry in evaluation_state.items()}
+        projected[assessed_skill]["count"]+=1
+        target_skill=pick_target_skill(projected)
+    else:
+        assessed_skill=None                  # opening call, nothing to score yet
+        target_skill="communication"         # the intro question
+
     started=time.perf_counter()
-    res=llmcalling(context,user_answer,history,evaluation_state)
+    res=llmcalling(context,user_answer,history,rubric_text(),assessed_skill,target_skill)
     latency_ms=int((time.perf_counter()-started)*1000)
     cleaned=re.sub(r"```json|```", "", res).strip()
     try:
         parsed=json.loads(cleaned)
+        # clamp the score to the 0-10 rubric scale, a missing/non-numeric score counts as a parse failure
+        parsed["score"]=max(0, min(10, float(parsed.get("score"))))
         parse_ok=True
-        if "evaluation_update" in parsed:
-            session["evaluation_state"] = parsed["evaluation_update"]
-        history.append({"user": user_answer, "ai": parsed, "question": asked_question, "parse_ok": parse_ok})
-        min_questions=5
-        if parsed.get("decision","continue")=="stop":
-            if len(history)<min_questions:
-                parsed["decision"]="continue"
-                parsed["reason"]=f"Minimum question threshold not met. Asked {len(history)} questions, need at least {min_questions}."
-            else:
-                session["completed"]=True
-
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, TypeError, ValueError, AttributeError):
         parse_ok=False
         parsed = {
         "question": res,
         "feedback": "Could not parse feedback",
         "score": 0
     }
-        history.append({ "user": user_answer, "ai": parsed, "question": asked_question, "parse_ok": parse_ok })
+
+    if parse_ok and assessed_skill:
+        add_score(evaluation_state, assessed_skill, parsed["score"])
+    history.append({ "user": user_answer, "ai": parsed, "question": asked_question, "parse_ok": parse_ok,
+                     "assessed_skill": assessed_skill, "target_skill": target_skill })
+
+    # The server decides when the interview has enough evidence, using the rubric thresholds.
+    stop, reason=should_stop(evaluation_state, len(answered_turns(history)))
+    parsed["decision"]="stop" if stop else "continue"
+    parsed["reason"]=reason
+    if stop:
+        session["completed"]=True
+        # the generated next question is never asked, so a closing line replaces it (also in history)
+        parsed["question"]="Thanks, that's all the questions I have. Generating your report…"
 
     # Save this turn to chat_history right away, so per-question data isn't lost if the interview is never ended.
     # The opening call (no previous question yet) only produces the intro question, so there's nothing to save.
@@ -249,6 +257,10 @@ async def interview(request: InterviewRequest, user=Depends(get_current_user)):
                 "feedback": parsed.get("feedback", ""),
                 "score": parsed.get("score", 0) if parse_ok else None,   # None so parse failures aren't mistaken for a real 0
                 "evaluation_state": session["evaluation_state"],
+                "rubric_version": RUBRIC_VERSION,
+                "assessed_skill": assessed_skill,
+                "band": parsed.get("band") if parse_ok else None,
+                "justification": parsed.get("justification") if parse_ok else None,
                 "latency_ms": latency_ms,
                 "parse_ok": parse_ok,
                 "raw_response": res,
@@ -323,6 +335,8 @@ async def end_interview(request: InterviewRequest, user=Depends(get_current_user
         supabase.table("reports").insert({
             "interview_id": session["interview_id"],
             "avg_score": avg_score,
+            "rubric_version": RUBRIC_VERSION,
+            "skill_scores": session["evaluation_state"],
             "llm_score": parsed.get("score",0),
             "feedback": parsed.get("feedback","No feedback provided"),
             "improvements": parsed.get("improvements","No improvements provided"),
@@ -346,6 +360,7 @@ async def end_interview(request: InterviewRequest, user=Depends(get_current_user
         "llm_score":parsed.get("score",0),
         "feedback":parsed.get("feedback","No feedback provided"),
         "improvements":parsed.get("improvements","No improvements provided"),
+        "skill_scores":session["evaluation_state"],
         "status":"interview completed"
     }
 

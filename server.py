@@ -11,10 +11,13 @@ from typing import List, Dict
 import uuid 
 import json
 import re
+import time
 from typing import Optional
 
 from datetime import datetime, timezone
 from db import supabase
+
+LLM_MODEL = "gemini-2.5-flash"   # model used by services/llmcalling.py, saved with each chat_history row
 
 # Interview sessions are stored in the interviews table (history, evaluation_state, completed),
 # and the interviews row id is used as the session ID.
@@ -204,10 +207,16 @@ async def interview(request: InterviewRequest, user=Depends(get_current_user)):
     user_answer=request.user
     history=session["history"]
     evaluation_state=session["evaluation_state"]
+    # The question this answer responds to is the one the AI asked in the previous turn
+    # (parsed["question"] below is the NEXT question, while parsed["score"]/["feedback"] grade THIS answer).
+    asked_question=history[-1]["ai"].get("question","") if history else ""
+    started=time.perf_counter()
     res=llmcalling(context,user_answer,history,evaluation_state)
+    latency_ms=int((time.perf_counter()-started)*1000)
     cleaned=re.sub(r"```json|```", "", res).strip()
     try:
         parsed=json.loads(cleaned)
+        parse_ok=True
         if "evaluation_update" in parsed:
             session["evaluation_state"] = parsed["evaluation_update"]
         history.append({"user": user_answer, "ai": parsed})
@@ -220,14 +229,34 @@ async def interview(request: InterviewRequest, user=Depends(get_current_user)):
                 session["completed"]=True
 
     except json.JSONDecodeError:
+        parse_ok=False
         parsed = {
         "question": res,
         "feedback": "Could not parse feedback",
         "score": 0
     }
         history.append({ "user": user_answer, "ai": parsed })
-    
-    
+
+    # Save this turn to chat_history right away, so per-question data isn't lost if the interview is never ended.
+    # The opening call (no previous question yet) only produces the intro question, so there's nothing to save.
+    if asked_question:
+        try:
+            supabase.table("chat_history").insert({
+                "interview_id": session["interview_id"],
+                "turn_index": len(history),
+                "question": asked_question,
+                "answer": user_answer,
+                "feedback": parsed.get("feedback", ""),
+                "score": parsed.get("score", 0) if parse_ok else None,   # None so parse failures aren't mistaken for a real 0
+                "evaluation_state": session["evaluation_state"],
+                "latency_ms": latency_ms,
+                "parse_ok": parse_ok,
+                "raw_response": res,
+                "model": LLM_MODEL
+            }).execute()
+        except Exception as e:
+            print(f"error saving chat history to database: {e}")
+
     save_session(session)   # persist history/evaluation state so the interview survives restarts
     print(f"Session {request.session_id} history: {history}")
     return parsed
@@ -259,22 +288,7 @@ async def end_interview(request: InterviewRequest, user=Depends(get_current_user
             "improvements":"Could not parse response"
         }
 
-    interview_id=session.get("interview_id")
-    chat_rows=[
-        {
-            "interview_id": interview_id,
-            "question": cnvo["ai"].get("question", ""),
-            "answer": cnvo["user"],
-            "feedback": cnvo["ai"].get("feedback", ""),
-            "score": cnvo["ai"].get("score", 0)
-        }
-        for cnvo in history
-    ]
-    try:
-        supabase.table("chat_history").insert(chat_rows).execute()
-    except Exception as e:
-        print(f"error saving chat history to database: {e}")
-    
+    # chat_history rows are saved per turn in /interview, so there's nothing to bulk insert here.
     try:
         supabase.table("reports").insert({
             "interview_id": session["interview_id"],

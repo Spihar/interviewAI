@@ -45,12 +45,27 @@
       <section class="panel chat-area">
         <div class="chat-status-bar" id="chatStatusBar">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 8v4l3 3"/></svg>
-          Upload your resume and start answering questions
+          Read the privacy note to begin
         </div>
 
         <div class="chat-messages" id="chat">
-          <!-- Empty state shown by default -->
-          <div class="empty-state" id="emptyState">
+          <!-- Consent: the interview only starts once the privacy note is accepted (see startSession) -->
+          <div class="consent-card" id="consentCard">
+            <h3>Before we start</h3>
+            <p>InterviewAI is part of a college research project. By taking part:</p>
+            <ul>
+              <li>Your resume text and your answers are stored in Supabase for the research project.</li>
+              <li>The data is anonymised before analysis, and nothing is published with names.</li>
+              <li>Spoken answers are transcribed and the audio is not kept.</li>
+              <li>You can ask the project owner to delete your data at any time.</li>
+            </ul>
+            <p><a href="privacy.html" target="_blank" rel="noopener">Read the full privacy note</a></p>
+            <label class="consent-check"><input type="checkbox" id="consentBox" onchange="document.getElementById('consentBtn').disabled = !this.checked" /> I have read the privacy note and agree to my data being used this way</label>
+            <button class="btn primary" id="consentBtn" onclick="acceptConsent()" type="button" disabled>Start interview</button>
+          </div>
+
+          <!-- Empty state, shown once the interview has started -->
+          <div class="empty-state" id="emptyState" hidden>
             <h3>Ready when you are</h3>
             <p>Upload your resume on the right, then type your first answer or use the mic to speak. The interview ends on its own once every skill has been assessed, or when you end it.</p>
           </div>

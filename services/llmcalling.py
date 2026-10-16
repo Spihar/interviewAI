@@ -2,6 +2,9 @@ from google import genai
 import os
 from dotenv import load_dotenv
 load_dotenv()
+
+LLM_MODEL = "gemini-2.5-flash"   # also saved with each chat_history row by server.py
+
 # rubric: the rubric text (bands + criteria) the answer is scored against
 # assessed_skill: the skill the latest answer is scored on (None on the first interaction)
 # target_skill: the skill the next question should assess
@@ -14,7 +17,7 @@ def llmcalling(context,user,history,rubric,assessed_skill,target_skill,focus_top
     client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
     response = client.models.generate_content(
-        model="gemini-2.5-flash", contents=
+        model=LLM_MODEL, contents=
         f"""
         You are a adaptive AI interviewer.
 

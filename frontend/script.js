@@ -5,6 +5,7 @@ let audioChunks = [];
 let isRecording = false;
 let questionCount = 0;
 let totalScore = 0;
+let pendingSttMs = null;   // how long the last transcription took, sent with the next answer
 // Read AI questions aloud; defaults to on, and localStorage can throw in private windows.
 let voiceOn = true;
 try { voiceOn = localStorage.getItem("voiceOn") !== "false"; } catch (e) { voiceOn = true; }
@@ -52,7 +53,8 @@ window.onload = async() => {
   }); 
 
   renderCoverage(null);
-  await startSession();
+  // The interview starts only after the privacy note is accepted (acceptConsent), so the controls wait until then.
+  setInterviewControls(false);
   // Auto-resize textarea
   const ta = document.getElementById("history");
   ta.addEventListener("input", () => {
@@ -89,6 +91,18 @@ function authHeaders(extra = {}) {
   };
 }
 
+// ── Consent ───────────────────────────────────────────────────────────────────
+// The server rejects /start_interview without consent: true, and stores when it was given.
+async function acceptConsent() {
+  if (!document.getElementById("consentBox").checked) { shakeElement("consentCard"); return; }
+  document.getElementById("consentBtn").disabled = true;
+  await startSession();
+}
+
+function setInterviewControls(enabled) {
+  ["sendBtn", "uploadBtn", "recordBtn"].forEach((id) => { document.getElementById(id).disabled = !enabled; });
+}
+
 async function startSession() {
   try {
     // A practice interview from the dashboard passes its topic as ?focus=
@@ -101,16 +115,20 @@ async function startSession() {
     const res = await fetch(`${API_BASE}/start_interview`, {
       method: "POST",
       headers: authHeaders({ "Content-Type": "application/json" }),
-      body: JSON.stringify({ focus_topic: focus || null }),
+      body: JSON.stringify({ focus_topic: focus || null, consent: true }),
     });
     const data = await res.json();
-    if (data.error) throw new Error(data.error);
+    if (!res.ok || data.error) throw new Error(data.detail || data.error);
 
     session_id = data.session_id;
     document.getElementById("sessionIdLabel").textContent = "Session " + session_id.slice(0, 8);
     document.getElementById("sessionBadge").classList.add("active");
+    document.getElementById("consentCard").remove();
+    document.getElementById("emptyState").hidden = false;
+    setInterviewControls(true);
     setStatus("Session active — upload your resume or start answering");
   } catch (err) {
+    document.getElementById("consentBtn").disabled = false;   // let them try again
     document.getElementById("sessionIdLabel").textContent = "Connection failed";
     setStatus("⚠ Could not connect to backend. Is it running?");
   }
@@ -188,8 +206,9 @@ async function askAI() {
     const res = await fetch(`${API_BASE}/interview`, {
       method: "POST",
       headers: authHeaders({ "Content-Type": "application/json" }), // Attach auth header with JWT
-      body: JSON.stringify({ session_id, user }),
+      body: JSON.stringify({ session_id, user, stt_ms: pendingSttMs }),
     });
+    pendingSttMs = null;   // a typed follow-up answer has no transcription time
     const data = await res.json();
     removeTypingIndicator(typingId);
 
@@ -324,11 +343,13 @@ function stopRecording() {
       const res = await fetch(`${API_BASE}/speech_to_text`, { method: "POST", headers: authHeaders(), body: formData });
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail || "Transcription failed");
+      pendingSttMs = Number.isFinite(data.stt_ms) ? data.stt_ms : null;
       document.getElementById("history").value = data.text;
       document.getElementById("charCount").textContent = data.text.length;
       setStatus("Transcription done — review and send");
     } catch (err) {
       document.getElementById("history").value = "";
+      pendingSttMs = null;
       setStatus("Transcription failed");
       console.error(err);
     }

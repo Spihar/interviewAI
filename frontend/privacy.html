@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=DM+Mono:wght@400;500&family=Fraunces:opsz,wght@9..144,500;9..144,600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="theme.css" />
+  <script src="theme.js"></script>
+  <title>InterviewAI · Privacy</title>
+  <style>
+    .privacy { max-width: 680px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px; }
+    .privacy h2 { font-size: 16px; margin: 0 0 6px; }
+    .privacy p, .privacy ul { margin: 0; color: var(--ink-2); }
+    .privacy ul { padding-left: 20px; }
+    .privacy li { margin-bottom: 4px; }
+  </style>
+</head>
+<body>
+  <!-- Public page (no login needed), linked from the consent card on the interview page. -->
+  <main class="page">
+    <div class="privacy">
+      <a class="brand" href="dashboard.html"><i>AI</i>InterviewAI</a>
+      <h1 class="title">Privacy note</h1>
+      <p>InterviewAI is part of a college research project on AI mock interviews. Please read this before you start an interview.</p>
+
+      <section class="panel">
+        <h2>What is stored</h2>
+        <ul>
+          <li>The text extracted from the resume you upload.</li>
+          <li>Your answers, the questions you were asked, and the scores and feedback given.</li>
+          <li>Timing data, such as how long each AI response and transcription took.</li>
+          <li>Your account ID, so your interviews show on your dashboard.</li>
+        </ul>
+        <p style="margin-top:8px">This data is stored in Supabase for the research project.</p>
+      </section>
+
+      <section class="panel">
+        <h2>How it is used</h2>
+        <ul>
+          <li>The data is anonymised before analysis.</li>
+          <li>Nothing is published with names or other details that identify you.</li>
+        </ul>
+      </section>
+
+      <section class="panel">
+        <h2>Audio</h2>
+        <p>When you answer by voice, the recording is sent for transcription and then deleted. Only the text is kept; the audio is not stored.</p>
+      </section>
+
+      <section class="panel">
+        <h2>Deleting your data</h2>
+        <p>You can ask the project owner to delete your data at any time, and it will be removed.</p>
+      </section>
+
+      <p><a class="btn" href="index.html">Back to the interview</a></p>
+    </div>
+  </main>
+</body>
+</html>

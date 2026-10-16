@@ -39,6 +39,15 @@
 .empty-state h3 { font-family: var(--display); font-weight: 600; font-size: 22px; color: var(--ink); margin: 0 0 8px; }
 .empty-state p { margin: 0; }
 
+/* Consent card shown before the interview starts */
+.consent-card { margin: auto; max-width: 480px; padding: 24px 10px; color: var(--ink-2); }
+.consent-card h3 { font-family: var(--display); font-weight: 600; font-size: 22px; color: var(--ink); margin: 0 0 8px; }
+.consent-card ul { margin: 8px 0 12px; padding-left: 20px; }
+.consent-card li { margin-bottom: 4px; }
+.consent-card a { color: var(--accent); }
+.consent-check { display: flex; gap: 8px; align-items: flex-start; margin: 14px 0; color: var(--ink); font-weight: 500; cursor: pointer; }
+.consent-check input { margin-top: 3px; }
+
 .msg-row { display: flex; gap: 10px; align-items: flex-end; animation: fadeIn .25s ease; }
 .msg-row.user { justify-content: flex-end; }
 .avatar {

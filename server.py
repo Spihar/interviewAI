@@ -1,6 +1,6 @@
 import fastapi
 from fastapi import Header, HTTPException, Depends
-from services.llmcalling import llmcalling
+from services.llmcalling import llmcalling, LLM_MODEL
 from services.pdfreading import extract_text_pymupdf
 from services.llmfeedback import llmfeedback
 from services.rubric import RUBRIC_VERSION, SKILLS, rubric_text, empty_state, normalize_state, add_score, pick_target_skill, should_stop, is_settled
@@ -18,8 +18,6 @@ from typing import Optional
 
 from datetime import datetime, timezone
 from db import supabase
-
-LLM_MODEL = "gemini-2.5-flash"   # model used by services/llmcalling.py, saved with each chat_history row
 
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024   # resume and audio uploads are capped at 10 MB
 # Browser recording MIME types -> file extension, so Groq Whisper can tell the format.
@@ -164,14 +162,19 @@ async def upload_resume(session_id: str, file: fastapi.UploadFile = fastapi.File
 
 # StartRequest is the optional body of /start_interview.
 # focus_topic is set when the user starts a practice interview from a suggested topic on the dashboard.
+# consent must be true: the user ticked the privacy checkbox (see frontend/privacy.html) before starting.
 class StartRequest(BaseModel):
     focus_topic: Optional[str] = None
+    consent: bool = False
 
 # The /start_interview endpoint is responsible for initiating a new interview session.
 # When a client makes a POST request to this endpoint, we create a new row in the interviews table
 # with an empty history and evaluation state, and return its id as the session ID.
 @app.post("/start_interview")
 async def start_interview(request: Optional[StartRequest] = None, user=Depends(get_current_user)):
+    # Interview data is stored for a research project, so no interview starts without the user's consent.
+    if not request or request.consent is not True:
+        raise HTTPException(status_code=400, detail="Please accept the privacy note before starting the interview")
     #user_id = str(uuid.uuid4())  # Generate a unique user ID for the interview session
     user_id = user.id
     row={
@@ -180,7 +183,9 @@ async def start_interview(request: Optional[StartRequest] = None, user=Depends(g
         "status": "active",
         "history": [],
         "evaluation_state": empty_state(),   # {skill: {"count", "avg"}}, kept by the server
-        "completed":False
+        "completed":False,
+        "consent_given": True,               # needs migrations/005_consent_timing.sql
+        "consent_at": datetime.now(timezone.utc).isoformat()
     }
     focus_topic=(request.focus_topic or "").strip()[:120] if request else ""
     if focus_topic:
@@ -213,9 +218,11 @@ async def start_interview(request: Optional[StartRequest] = None, user=Depends(g
 # the expected structure of the request body for the /interview endpoint.
 # This model includes two fields: session_id (a string representing the session ID) 
 # and user (a string representing the user's input).
+# stt_ms is optional: how long /speech_to_text took when the answer was spoken, saved with the turn.
 class InterviewRequest(BaseModel):
     session_id:str
     user:str
+    stt_ms: Optional[int] = None
 
 @app.post("/interview")
 async def interview(request: InterviewRequest, user=Depends(get_current_user)):
@@ -285,26 +292,35 @@ async def interview(request: InterviewRequest, user=Depends(get_current_user)):
     # Save this turn to chat_history right away, so per-question data isn't lost if the interview is never ended.
     # The opening call (no previous question yet) only produces the intro question, so there's nothing to save.
     if asked_question:
+        turn_row={
+            "interview_id": session["interview_id"],
+            "turn_index": len(history),
+            "question": asked_question,
+            "answer": user_answer,
+            "feedback": parsed.get("feedback", ""),
+            "score": parsed.get("score", 0) if parse_ok else None,   # None so parse failures aren't mistaken for a real 0
+            "evaluation_state": session["evaluation_state"],
+            "rubric_version": RUBRIC_VERSION,
+            "assessed_skill": assessed_skill,
+            "band": parsed.get("band") if parse_ok else None,
+            "justification": parsed.get("justification") if parse_ok else None,
+            "latency_ms": latency_ms,
+            # None for typed answers; clamped so a bad client value can't store nonsense
+            "stt_ms": max(0, min(request.stt_ms, 600000)) if request.stt_ms is not None else None,
+            "parse_ok": parse_ok,
+            "raw_response": res,
+            "model": LLM_MODEL
+        }
         try:
-            supabase.table("chat_history").insert({
-                "interview_id": session["interview_id"],
-                "turn_index": len(history),
-                "question": asked_question,
-                "answer": user_answer,
-                "feedback": parsed.get("feedback", ""),
-                "score": parsed.get("score", 0) if parse_ok else None,   # None so parse failures aren't mistaken for a real 0
-                "evaluation_state": session["evaluation_state"],
-                "rubric_version": RUBRIC_VERSION,
-                "assessed_skill": assessed_skill,
-                "band": parsed.get("band") if parse_ok else None,
-                "justification": parsed.get("justification") if parse_ok else None,
-                "latency_ms": latency_ms,
-                "parse_ok": parse_ok,
-                "raw_response": res,
-                "model": LLM_MODEL
-            }).execute()
+            supabase.table("chat_history").insert(turn_row).execute()
         except Exception as e:
-            print(f"error saving chat history to database: {e}")
+            # most likely migrations/005_consent_timing.sql hasn't been run yet, so keep the turn without stt_ms
+            print(f"error saving chat history with stt_ms, retrying without it: {e}")
+            turn_row.pop("stt_ms")
+            try:
+                supabase.table("chat_history").insert(turn_row).execute()
+            except Exception as e:
+                print(f"error saving chat history to database: {e}")
 
     save_session(session)   # persist history/evaluation state so the interview survives restarts
     print(f"Session {request.session_id} history: {history}")
@@ -603,11 +619,13 @@ async def speech_to_text(file: fastapi.UploadFile = fastapi.File(...), user=Depe
     file_location = f"temp/{uuid.uuid4().hex}{ext}"
     with open(file_location, "wb") as f:
         f.write(data)
+    started=time.perf_counter()
     try:
         text = await run_in_threadpool(sst, file_location)
     except Exception as e:
         print("Transcription failed:", e)
         raise HTTPException(status_code=502, detail="Transcription failed, please try again or type your answer")
     finally:
-        os.remove(file_location)  # Clean up the temporary file
-    return {"text": text}
+        os.remove(file_location)  # Clean up the temporary file; audio is never kept
+    # stt_ms is sent back with the next /interview call and saved on that turn's chat_history row
+    return {"text": text, "stt_ms": int((time.perf_counter()-started)*1000)}

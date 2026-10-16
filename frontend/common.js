@@ -89,7 +89,7 @@ function escHtml(str) {
     .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
-// startPractice opens the interview room focused on one topic.
+// practiceUrl returns the interview room URL for a practice interview focused on one topic.
 function practiceUrl(topic) {
   return "index.html?focus=" + encodeURIComponent(topic);
 }

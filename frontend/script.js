@@ -1,4 +1,5 @@
-const API_BASE = "http://127.0.0.1:8000";
+// API_BASE, the Supabase client (sb), accessToken, escHtml, initials, SKILL_LABELS and logout come from common.js,
+// which index.html loads first, so the backend address and Supabase keys live in one place.
 let session_id = "";
 let mediaRecorder;
 let audioChunks = [];
@@ -10,16 +11,11 @@ let pendingSttMs = null;   // how long the last transcription took, sent with th
 let voiceOn = true;
 try { voiceOn = localStorage.getItem("voiceOn") !== "false"; } catch (e) { voiceOn = true; }
 
-// ── Supabase client setup ─────────────────────────────────────────────────────
-// Supabase is our authentication provider. It handles user accounts, login, and JWT management.
-// We use the anon key here because we're only using Supabase for auth, and all sensitive operations are done in the backend where we verify the JWT.
+// ── Supabase session ──────────────────────────────────────────────────────────
+// Supabase is our authentication provider; the client (sb) is created in common.js with the publishable key,
+// because Supabase is only used for auth here and all sensitive operations happen in the backend, which verifies the JWT.
 // The onAuthStateChange listener keeps our frontend in sync with the user's auth status (e.g. if they log out in another tab).
-const SUPABASE_URL  = "https://hincwkkvpdhaoyciailp.supabase.co";
-const SUPABASE_ANON = "sb_publishable_RyzMJZWK_hBE9qHpubmsIg_1LJNyHPp";
-const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON);
-
 let currentUser  = null;
-let accessToken  = null;
 // ── Session init ──────────────────────────────────────────────────────────────
 // This runs before anything else.
 // If the user is not logged in, they get kicked to auth.html immediately.
@@ -40,8 +36,7 @@ window.onload = async() => {
   const name = currentUser.user_metadata?.full_name || currentUser.email.split("@")[0];
   document.getElementById("userNameLabel").textContent = name;
   document.getElementById("userNameNav").textContent = name;
-  document.getElementById("userInitials").textContent =
-    name.split(/[\s._-]+/).filter(Boolean).slice(0, 2).map((p) => p[0].toUpperCase()).join("");
+  document.getElementById("userInitials").textContent = initials(name);
   // Keep accessToken fresh if Supabase refreshes the session in the background
   sb.auth.onAuthStateChange((_event, newSession) => {
     if (newSession) {
@@ -70,12 +65,8 @@ window.onload = async() => {
   });
 };
 // ── LOGOUT ────────────────────────────────────────────────────────────────────
-// Clears the JWT from localStorage and ends the Supabase session.
+// logout() in common.js clears the JWT from localStorage and ends the Supabase session.
 // After this, getSession() will return null — auth guard kicks them out.
-async function logout() {
-  await sb.auth.signOut();
-  window.location.href = "auth.html";
-}
 // ------------------------important note about auth-------------------------
 // The JWT (accessToken) is stored in localStorage by the Supabase SDK when the user logs in.
 // We read this token on page load and attach it to every API call in the authHeaders() function below.
@@ -140,7 +131,7 @@ function handleFileSelect() {
   if (!file) return;
   const zone = document.getElementById("resumeZone");
   document.getElementById("resumeZoneText").innerHTML =
-    `<strong>${file.name}</strong><br/><small style="font-size:11px;">Ready to upload</small>`;
+    `<strong>${escHtml(file.name)}</strong><br/><small style="font-size:11px;">Ready to upload</small>`;
 }
 
 async function uploadResume() {
@@ -164,12 +155,13 @@ async function uploadResume() {
       body: formData,
     });
     const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.detail || data.error || "Upload failed");
 
     const zone = document.getElementById("resumeZone");
     zone.classList.add("uploaded");
     zone.style.cursor = "default";
     document.getElementById("resumeZoneText").innerHTML =
-      `✅ <strong>${file.name}</strong><br/><small style="font-size:11px;">Resume uploaded</small>`;
+      `✅ <strong>${escHtml(file.name)}</strong><br/><small style="font-size:11px;">Resume uploaded</small>`;
 
     btn.textContent = "✓ Uploaded";
     btn.style.borderColor = "var(--success)";
@@ -181,6 +173,7 @@ async function uploadResume() {
     btn.style.borderColor = "var(--danger)";
     btn.style.color = "var(--danger)";
     btn.disabled = false;
+    setStatus("Resume upload failed: " + err.message);
     console.error(err);
   }
 }
@@ -212,8 +205,11 @@ async function askAI() {
     const data = await res.json();
     removeTypingIndicator(typingId);
 
-    if (data.error) {
-      addAIMessage("Sorry, something went wrong: " + data.error);
+    if (!res.ok || data.error) {
+      // Errors are shown but not read aloud. The answer wasn't saved, so put it back for resending.
+      addAIMessage("Sorry, something went wrong: " + (data.error || data.detail || "please try again"), false);
+      ta.value = user;
+      document.getElementById("charCount").textContent = user.length;
       setStatus("Error occurred");
     } else {
       // Add AI question bubble
@@ -249,7 +245,7 @@ async function askAI() {
     }
   } catch (err) {
     removeTypingIndicator(typingId);
-    addAIMessage("Connection error. Please check the backend is running.");
+    addAIMessage("Connection error. Please check the backend is running.", false);
     setStatus("Connection error");
     console.error(err);
   }
@@ -273,19 +269,15 @@ async function endInterview() {
       body: JSON.stringify({ session_id, user: "" }),
     });
     const data = await res.json();
-    //data from server
-    //"total_questions":len(history),
-    //    "average_score":avg_score,
-    //    "llm_score":parsed.get("score",0),
-    //    "feedback":parsed.get("feedback","No feedback provided"),
-    //    "improvements":parsed.get("improvements","No improvements provided"),
-    //    "status":"interview completed"
+    // On success the server returns total_questions, average_score, llm_score, feedback, improvements,
+    // skill_scores, weak_topics, suggested_topics and interview_id (see report_response in server.py).
+    if (!res.ok || data.error) throw new Error(data.error || data.detail || "Report failed");
     removeTypingIndicator(typingId);
     addReportCard(data);
     setStatus("Interview complete — check your report below");
   } catch (err) {
     removeTypingIndicator(typingId);
-    addAIMessage("Couldn't generate report. Please try again.");
+    addAIMessage("Couldn't generate report. " + err.message, false);
     console.error(err);
   }
 }
@@ -376,7 +368,8 @@ function addUserMessage(text) {
   scrollToBottom();
 }
 
-function addAIMessage(text) {
+// addAIMessage shows an AI bubble; questions are read aloud, errors pass speakIt=false.
+function addAIMessage(text, speakIt = true) {
   hideEmptyState();
   const chat = document.getElementById("chat");
   const row = document.createElement("div");
@@ -387,7 +380,7 @@ function addAIMessage(text) {
   `;
   chat.appendChild(row);
   scrollToBottom();
-  speak(text);
+  if (speakIt) speak(text);
 }
 
 // ── Read-aloud (browser text-to-speech) ───────────────────────────────────────
@@ -422,6 +415,8 @@ function renderVoiceBtn() {
   document.getElementById("voiceLabel").textContent = voiceOn ? "Voice on" : "Voice off";
 }
 
+// Chrome loads its voice list asynchronously and getVoices() is empty until it has; assigning a handler makes it
+// start loading now, so the first question can usually use a natural English voice instead of the default one.
 if ("speechSynthesis" in window) window.speechSynthesis.onvoiceschanged = () => {};
 document.addEventListener("DOMContentLoaded", renderVoiceBtn);
 
@@ -494,12 +489,7 @@ function addReportCard(data) {
 // ── Skill coverage panel ──────────────────────────────────────────────────────
 // Shows how many scored answers each rubric skill has (the server's evaluation state),
 // whether the server considers it settled (services/rubric.py is_settled), and which skill the next question assesses.
-const COVERAGE_SKILLS = [
-  ["communication", "Communication"],
-  ["technical_depth", "Technical depth"],
-  ["problem_solving", "Problem solving"],
-  ["project_experience", "Project experience"],
-];
+const COVERAGE_SKILLS = Object.entries(SKILL_LABELS);   // [key, label] pairs, from common.js
 const EVIDENCE_NEEDED = 2;   // dots drawn per skill, MIN_EVIDENCE_PER_SKILL in services/rubric.py
 
 function renderCoverage(state, nextSkill, settledBySkill) {
@@ -555,14 +545,6 @@ function onInputChange(el) {
 function scrollToBottom() {
   const chat = document.getElementById("chat");
   chat.scrollTop = chat.scrollHeight;
-}
-
-function escHtml(str) {
-  return String(str)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
 }
 
 function shakeElement(id) {

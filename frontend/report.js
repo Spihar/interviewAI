@@ -22,9 +22,11 @@ function showError(msg) {
   bar.hidden = false;
 }
 
-const SKILLS = ["communication", "technical_depth", "problem_solving", "project_experience"];
+// The rubric skills come from the server (/reports returns skill_names), the list here is only a fallback.
+let SKILLS = ["communication", "technical_depth", "problem_solving", "project_experience"];
 
 function render(r) {
+  if (Array.isArray(r.skill_names) && r.skill_names.length) SKILLS = r.skill_names;
   const assessed = SKILLS.filter((s) => r.skills[s] !== null);
   const ranked = assessed.slice().sort((a, b) => r.skills[b] - r.skills[a]);
   const best = ranked[0], worst = ranked[ranked.length - 1];

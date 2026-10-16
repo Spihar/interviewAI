@@ -3,14 +3,13 @@ from fastapi import Header, HTTPException, Depends
 from services.llmcalling import llmcalling, LLM_MODEL
 from services.pdfreading import extract_text_pymupdf
 from services.llmfeedback import llmfeedback
-from services.rubric import RUBRIC_VERSION, SKILLS, rubric_text, empty_state, normalize_state, add_score, pick_target_skill, should_stop, is_settled
+from services.rubric import RUBRIC_VERSION, SKILLS, rubric_text, empty_state, normalize_state, add_score, pick_target_skill, should_stop, is_settled, band_for
 from services.stt import sst
 from pydantic import BaseModel # For defining data models for request and response bodies in FastAPI.
 import os
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.concurrency import run_in_threadpool
-from typing import List, Dict
-import uuid 
+import uuid
 import json
 import re
 import time
@@ -35,6 +34,9 @@ AUDIO_EXTENSIONS = {
 # and the interviews row id is used as the session ID.
 # This keeps interviews alive across server restarts instead of losing them from memory.
 
+# The Supabase and Gemini clients are synchronous, so endpoints that call them are plain `def`:
+# FastAPI runs those in a thread pool, so one slow LLM call doesn't block every other request.
+# Endpoints that must `await` an upload stay `async` and push blocking work through run_in_threadpool.
 
 app = fastapi.FastAPI()
 
@@ -55,7 +57,7 @@ app.add_middleware(
 #   4. Raises 401 if token is missing, fake, or expired
 #
 # Any endpoint with `user=Depends(get_current_user)` is automatically protected.
-async def get_current_user(authorization: Optional[str] = Header(None)):
+def get_current_user(authorization: Optional[str] = Header(None)):
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
  
@@ -66,21 +68,28 @@ async def get_current_user(authorization: Optional[str] = Header(None)):
         if not response or not response.user:
             raise HTTPException(status_code=401, detail="Invalid or expired token")
         return response.user
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=401, detail=f"Auth error: {str(e)}")
+        # log the Supabase error here, the client only needs to know the token wasn't accepted
+        print(f"auth error: {e}")
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
 
 
 # ── SESSION STORAGE ───────────────────────────────────────────────────────────
 # load_session reads the interview row for the given session ID and returns it shaped like a session dict.
 # Returns None if the session doesn't exist (or the ID isn't a valid UUID),
-# and raises 403 if the interview belongs to a different user.
+# raises 403 if the interview belongs to a different user,
+# and raises 503 if the database can't be reached, so an outage isn't reported as "Invalid session ID".
 def load_session(session_id, user):
     try:
         # select * so optional columns (focus_topic) don't break loading before their migration is run
         response = supabase.table("interviews").select("*").eq("id", session_id).limit(1).execute()
     except Exception as e:
+        if "invalid input syntax" in str(e):        # not a UUID, so it can't be a session ID
+            return None
         print(f"error loading session {session_id}: {e}")
-        return None
+        raise HTTPException(status_code=503, detail="Could not reach the database, please try again")
     if not response or not response.data:
         return None
     row = response.data[0]
@@ -98,6 +107,7 @@ def load_session(session_id, user):
     }
 
 # save_session writes the session's history, evaluation state and completed flag back to the interviews row.
+# It raises 503 on failure: if the turn isn't saved, the client must not think it was.
 def save_session(session):
     try:
         supabase.table("interviews").update({
@@ -107,6 +117,7 @@ def save_session(session):
         }).eq("id", session["interview_id"]).execute()
     except Exception as e:
         print(f"error saving session {session['interview_id']}: {e}")
+        raise HTTPException(status_code=503, detail="Could not save your answer, please send it again")
 
 
 @app.get("/")
@@ -116,7 +127,7 @@ async def read_root():
 @app.post("/upload_resume")
 async def upload_resume(session_id: str, file: fastapi.UploadFile = fastapi.File(...), user=Depends(get_current_user)):
 
-    session = load_session(session_id, user)
+    session = await run_in_threadpool(load_session, session_id, user)
     # We first check if the provided session_id exists in the interviews table.
     # If it doesn't exist, we return an error response indicating that the session ID is invalid.
     # load_session also verifies that the user making the request owns the interview session,
@@ -144,20 +155,22 @@ async def upload_resume(session_id: str, file: fastapi.UploadFile = fastapi.File
     with open(file_location, "wb") as f:
         f.write(data)
     try:
-        text = extract_text_pymupdf(file_location)
+        text = await run_in_threadpool(extract_text_pymupdf, file_location)
     finally:
         os.remove(file_location)  # Clean up the temporary file
 
     # We store the extracted text as the interview's resume_text, which load_session uses as the session's context.
+    # Only the length is logged: the resume itself is personal data.
     session["context"] = text
-    print(f"Extracted text for session {session_id}: {text}")
-    
+    print(f"Extracted {len(text)} characters of resume text for session {session_id}")
+
+    def save_resume():
+        supabase.table("interviews").update({"resume_text": text}).eq("id", interview_id).execute()
     try:
-        supabase.table("interviews").update({
-            "resume_text": text
-        }).eq("id", interview_id).execute()
+        await run_in_threadpool(save_resume)
     except Exception as e:
         print(f"error saving resume text to database: {e}")
+        raise HTTPException(status_code=503, detail="Could not save your resume, please upload it again")
 
     return {"extracted_text": text}
 
@@ -179,7 +192,7 @@ def check_consent_columns(error):
 # When a client makes a POST request to this endpoint, we create a new row in the interviews table
 # with an empty history and evaluation state, and return its id as the session ID.
 @app.post("/start_interview")
-async def start_interview(request: Optional[StartRequest] = None, user=Depends(get_current_user)):
+def start_interview(request: Optional[StartRequest] = None, user=Depends(get_current_user)):
     # Interview data is stored for a research project, so no interview starts without the user's consent.
     if not request or request.consent is not True:
         raise HTTPException(status_code=400, detail="Please accept the privacy note before starting the interview")
@@ -235,7 +248,7 @@ class InterviewRequest(BaseModel):
     stt_ms: Optional[int] = None
 
 @app.post("/interview")
-async def interview(request: InterviewRequest, user=Depends(get_current_user)):
+def interview(request: InterviewRequest, user=Depends(get_current_user)):
 
     session = load_session(request.session_id, user)   # also does the ownership check
     if not session:
@@ -269,21 +282,30 @@ async def interview(request: InterviewRequest, user=Depends(get_current_user)):
         target_skill="communication"         # the intro question
 
     started=time.perf_counter()
-    res=llmcalling(context,user_answer,history,rubric_text(),assessed_skill,target_skill,session.get("focus_topic"))
+    try:
+        res=llmcalling(context,user_answer,history,rubric_text(),assessed_skill,target_skill,session.get("focus_topic"))
+    except Exception as e:
+        print(f"LLM call failed for session {request.session_id}: {e}")
+        raise HTTPException(status_code=502, detail="The AI interviewer didn't respond, please send your answer again")
     latency_ms=int((time.perf_counter()-started)*1000)
     cleaned=re.sub(r"```json|```", "", res).strip()
     try:
         parsed=json.loads(cleaned)
         # clamp the score to the 0-10 rubric scale, a missing/non-numeric score counts as a parse failure
         parsed["score"]=max(0, min(10, float(parsed.get("score"))))
+        # the band always follows the clamped score, so the two can't disagree
+        parsed["band"]=band_for(parsed["score"]) if assessed_skill else ""
         parse_ok=True
     except (json.JSONDecodeError, TypeError, ValueError, AttributeError):
+        # The raw response is only kept in chat_history.raw_response; the candidate is asked the same
+        # question again (or the intro question), and the next turn assesses the same skill.
         parse_ok=False
         parsed = {
-        "question": res,
-        "feedback": "Could not parse feedback",
-        "score": 0
-    }
+            "question": asked_question or "Let's start. Please briefly introduce yourself and your background.",
+            "feedback": "Sorry, I couldn't score that answer. Please answer the question again.",
+            "score": 0
+        }
+        target_skill=assessed_skill or "communication"
 
     if parse_ok and assessed_skill:
         add_score(evaluation_state, assessed_skill, parsed["score"])
@@ -291,20 +313,21 @@ async def interview(request: InterviewRequest, user=Depends(get_current_user)):
                      "assessed_skill": assessed_skill, "target_skill": target_skill })
 
     # The server decides when the interview has enough evidence, using the rubric thresholds.
-    stop, reason=should_stop(evaluation_state, len(answered_turns(history)))
-    parsed["decision"]="stop" if stop else "continue"
-    parsed["reason"]=reason
+    stop, reason=should_stop(evaluation_state, len(answered_turns(history)), len(history))
     if stop:
         session["completed"]=True
         # the generated next question is never asked, so a closing line replaces it (also in history)
         parsed["question"]="Thanks, that's all the questions I have. Generating your report…"
+
+    # Save the session first: if that fails the client gets a 503 and resends, without a duplicate chat_history row.
+    save_session(session)   # persist history/evaluation state so the interview survives restarts
 
     # Save this turn to chat_history right away, so per-question data isn't lost if the interview is never ended.
     # The opening call (no previous question yet) only produces the intro question, so there's nothing to save.
     if asked_question:
         turn_row={
             "interview_id": session["interview_id"],
-            "turn_index": len(history),
+            "turn_index": len(history),          # 1-based position in history, the opening turn is 1, so the first answer is 2
             "question": asked_question,
             "answer": user_answer,
             "feedback": parsed.get("feedback", ""),
@@ -333,12 +356,11 @@ async def interview(request: InterviewRequest, user=Depends(get_current_user)):
                 except Exception as e:
                     print(f"error saving chat history without stt_ms: {e}")
 
-    save_session(session)   # persist history/evaluation state so the interview survives restarts
-    print(f"Session {request.session_id} history: {history}")
-    # Tell the frontend whether this answer counts towards the score (same rule as answered_turns),
+    # Tell the frontend whether to stop, whether this answer counts towards the score (same rule as answered_turns),
     # and the per-skill evidence for the coverage panel,
-    # on a copy so it isn't stored in history and doesn't end up in the LLM prompt.
-    return {**parsed, "counted": bool(asked_question) and parse_ok,
+    # on a copy so none of it is stored in history or ends up in the LLM prompt.
+    return {**parsed, "decision": "stop" if stop else "continue", "reason": reason,
+            "counted": bool(asked_question) and parse_ok,
             "skill_state": evaluation_state, "target_skill": target_skill,
             "settled": {skill: is_settled(entry) for skill, entry in evaluation_state.items()}}
 
@@ -369,7 +391,7 @@ def answered_turns(history):
 
 
 @app.post("/end_interview")
-async def end_interview(request: InterviewRequest, user=Depends(get_current_user)):
+def end_interview(request: InterviewRequest, user=Depends(get_current_user)):
     session = load_session(request.session_id, user)   # also does the ownership check
     if not session:
         return {"error": "Invalid session ID"}
@@ -377,7 +399,13 @@ async def end_interview(request: InterviewRequest, user=Depends(get_current_user
     # Only answers to a real question that the LLM graded properly count towards the final score and feedback.
     turns=answered_turns(history)
     if not turns:
-        return {'ai':'no interview data found'}
+        return {"error": "No answered questions yet, so there is nothing to report"}
+
+    # A retried /end_interview returns the report already saved instead of creating a second one.
+    existing=existing_report(session["interview_id"])
+    if existing:
+        return report_response(existing, len(turns), session)
+
     scores=[]
     for turn in turns:
         try:
@@ -388,11 +416,17 @@ async def end_interview(request: InterviewRequest, user=Depends(get_current_user
     avg_score=round((sum(scores)/len(scores)),2) if scores else 0
 
     #change to llm feedbacking
-    feedbackdata=llmfeedback(turns, SKILLS)
+    try:
+        feedbackdata=llmfeedback(turns, SKILLS)
+    except Exception as e:
+        print(f"feedback LLM call failed for session {request.session_id}: {e}")
+        raise HTTPException(status_code=502, detail="The AI couldn't write your report, please try again")
     cleaned=re.sub(r"```json|```", "", feedbackdata).strip()
     try:
         parsed=json.loads(cleaned)
-    except:
+        if not isinstance(parsed, dict):
+            raise ValueError("feedback is not a JSON object")
+    except (json.JSONDecodeError, ValueError):
         parsed={
             "feedback":feedbackdata,
             "score":0,
@@ -415,12 +449,13 @@ async def end_interview(request: InterviewRequest, user=Depends(get_current_user
     try:
         supabase.table("reports").insert({**report_row, "weak_topics": weak_topics, "suggested_topics": suggested_topics}).execute()
     except Exception as e:
-        # most likely migrations/004_dashboard.sql hasn't been run yet, so save the report without the topic columns
-        print(f"error saving report with topics, retrying without them: {e}")
-        try:
-            supabase.table("reports").insert(report_row).execute()
-        except Exception as e:
-            print(f"error saving report to database: {e}")
+        print(f"error saving report to database: {e}")
+        # the topic columns are missing (migrations/004_dashboard.sql not run), so save the report without them
+        if "weak_topics" in str(e) or "suggested_topics" in str(e):
+            try:
+                supabase.table("reports").insert(report_row).execute()
+            except Exception as e:
+                print(f"error saving report without topics: {e}")
 
 
     try:
@@ -432,15 +467,30 @@ async def end_interview(request: InterviewRequest, user=Depends(get_current_user
     except Exception as e:
         print(f"error updating interview status: {e}")
 
+    return report_response({**report_row, "weak_topics": weak_topics, "suggested_topics": suggested_topics}, len(turns), session)
+
+
+# existing_report returns the report already saved for an interview, or None.
+def existing_report(interview_id):
+    try:
+        rows=supabase.table("reports").select("*").eq("interview_id", interview_id).limit(1).execute().data
+    except Exception as e:
+        print(f"error checking for an existing report: {e}")
+        return None
+    return rows[0] if rows else None
+
+
+# report_response shapes a report row as the /end_interview response the interview page shows.
+def report_response(report, total_questions, session):
     return {
-        "total_questions":len(turns),
-        "average_score":avg_score,
-        "llm_score":parsed.get("score",0),
-        "feedback":parsed.get("feedback","No feedback provided"),
-        "improvements":parsed.get("improvements","No improvements provided"),
-        "skill_scores":session["evaluation_state"],
-        "weak_topics":weak_topics,
-        "suggested_topics":suggested_topics,
+        "total_questions":total_questions,
+        "average_score":report.get("avg_score",0),
+        "llm_score":report.get("llm_score",0),
+        "feedback":report.get("feedback") or "No feedback provided",
+        "improvements":report.get("improvements") or "No improvements provided",
+        "skill_scores":report.get("skill_scores") or session["evaluation_state"],
+        "weak_topics":report.get("weak_topics") or [],
+        "suggested_topics":report.get("suggested_topics") or [],
         "interview_id":session["interview_id"],
         "status":"interview completed"
     }
@@ -494,8 +544,9 @@ def finished_interviews(user_id):
     ids=[row["id"] for row in interviews]
     reports=supabase.table("reports").select("*").in_("interview_id", ids).execute().data if ids else []
     by_interview={}
-    for report in reports or []:
-        by_interview[report["interview_id"]]=report    # one report per interview, the last one wins
+    # Should there be more than one report for an interview, the newest one wins.
+    for report in sorted(reports or [], key=lambda r: str(r.get("created_at") or "")):
+        by_interview[report["interview_id"]]=report
     finished=[{"interview": row, "report": by_interview[row["id"]]} for row in interviews if row["id"] in by_interview]
     finished.sort(key=lambda item: interview_time(item["interview"], item["report"]))
     return finished
@@ -517,7 +568,7 @@ def summarize(item):
 # /dashboard returns everything the home page shows: past interviews, per-skill trend,
 # current skill levels, weak topics and suggested practice topics.
 @app.get("/dashboard")
-async def dashboard(user=Depends(get_current_user)):
+def dashboard(user=Depends(get_current_user)):
     try:
         finished=finished_interviews(user.id)
     except Exception as e:
@@ -579,7 +630,7 @@ async def dashboard(user=Depends(get_current_user)):
 # /reports/{interview_id} returns one finished interview: its report, every scored answer,
 # and the previous interview's skill averages for comparison.
 @app.get("/reports/{interview_id}")
-async def get_report(interview_id: str, user=Depends(get_current_user)):
+def get_report(interview_id: str, user=Depends(get_current_user)):
     try:
         finished=finished_interviews(user.id)    # only the user's own interviews, so this is also the ownership check
     except Exception as e:
@@ -602,6 +653,7 @@ async def get_report(interview_id: str, user=Depends(get_current_user)):
         "improvements": report.get("improvements"),
         "weak_topics": report.get("weak_topics") or [],
         "suggested_topics": report.get("suggested_topics") or [],
+        "skill_names": SKILLS,               # the rubric skills, in order, so the page doesn't keep its own copy
         "previous": summarize(finished[index-1]) if index>0 else None,
         "number": index+1,
         "total": len(finished),

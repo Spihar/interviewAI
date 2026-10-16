@@ -25,9 +25,10 @@ SKILL_CRITERIA = {
 
 MIN_QUESTIONS = 5             # never stop before this many answered questions
 MAX_QUESTIONS = 12            # always stop at this many answered questions
+MAX_TURNS = MAX_QUESTIONS + 3 # hard stop counting unscored turns too, so repeated LLM parse failures can't run forever
 MIN_EVIDENCE_PER_SKILL = 2    # scored answers needed before a skill is settled
-DECISIVE_LOW = 3              # one answer averaging this or lower settles a skill
-DECISIVE_HIGH = 8             # one answer averaging this or higher settles a skill
+DECISIVE_LOW = 3              # a single answer scoring this or lower settles a skill
+DECISIVE_HIGH = 8             # a single answer scoring this or higher settles a skill
 
 
 # rubric_text formats the bands and criteria for the LLM prompt.
@@ -83,10 +84,26 @@ def is_settled(entry):
     return entry["count"] >= 1 and (entry["avg"] <= DECISIVE_LOW or entry["avg"] >= DECISIVE_HIGH)
 
 
+# band_for returns the rubric band a 0-10 score falls in, e.g. 6.5 -> "5-6".
+def band_for(score):
+    if score < 3:
+        return "0-2"
+    if score < 5:
+        return "3-4"
+    if score < 7:
+        return "5-6"
+    if score < 9:
+        return "7-8"
+    return "9-10"
+
+
 # should_stop decides whether the interview has enough evidence, returning (stop, reason).
-def should_stop(state, answered):
+# answered counts scored answers; total_turns counts every turn, including ones the LLM response couldn't be parsed for.
+def should_stop(state, answered, total_turns=0):
     if answered >= MAX_QUESTIONS:
         return True, f"Reached maximum of {MAX_QUESTIONS} questions"
+    if total_turns >= MAX_TURNS:
+        return True, f"Reached maximum of {MAX_TURNS} turns"
     unsettled = [skill for skill in SKILLS if not is_settled(state[skill])]
     if answered < MIN_QUESTIONS:
         return False, f"Answered {answered} questions, need at least {MIN_QUESTIONS}"

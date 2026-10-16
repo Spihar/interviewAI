@@ -3,59 +3,87 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>InterviewAI — Sign In</title>
+  <title>InterviewAI · Sign in</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=DM+Mono:wght@400;500&family=Fraunces:opsz,wght@9..144,500;9..144,600&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="theme.css" />
   <link rel="stylesheet" href="auth.css" />
   <script src="theme.js"></script>
 </head>
 <body>
-<div class="card">
-  <div class="logo">
-    <div class="logo-dot">
-      <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14H9V8h2v8zm4 0h-2V8h2v8z"/></svg>
+<div class="auth-shell">
+
+  <!-- ── Left: what the app does ── -->
+  <aside class="auth-side">
+    <a class="brand" href="auth.html"><i>AI</i>InterviewAI</a>
+    <div class="side-body">
+      <h1>Practise interviews on your own resume.</h1>
+      <p>Answer by typing or speaking. Every answer is scored on four skills, and your dashboard tracks what to practise next.</p>
+      <div class="sample" aria-hidden="true">
+        <div class="sample-head"><span class="eyebrow">Sample report</span><span class="sample-score num">7.2<small>/10</small></span></div>
+        <div class="sample-row"><span>Communication</span><span class="bar"><span style="width:80%;background:var(--skill-communication)"></span></span><b class="num">8.0</b></div>
+        <div class="sample-row"><span>Technical depth</span><span class="bar"><span style="width:71%;background:var(--skill-technical_depth)"></span></span><b class="num">7.1</b></div>
+        <div class="sample-row"><span>Problem solving</span><span class="bar"><span style="width:58%;background:var(--skill-problem_solving)"></span></span><b class="num">5.8</b></div>
+        <div class="sample-row"><span>Project experience</span><span class="bar"><span style="width:79%;background:var(--skill-project_experience)"></span></span><b class="num">7.9</b></div>
+      </div>
     </div>
-    InterviewAI
-  </div>
-  <p class="tagline">AI-powered mock interviews with real feedback</p>
+    <button class="theme-btn" data-theme-toggle type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg><span>Dark mode</span></button>
+  </aside>
 
-  <div class="tabs">
-    <button class="tab active" id="tabLogin"  onclick="switchTab('login')">Sign In</button>
-    <button class="tab"        id="tabSignup" onclick="switchTab('signup')">Create Account</button>
-  </div>
+  <!-- ── Right: one sign-in card ── -->
+  <main class="auth-main">
+    <div class="auth-card">
+      <h2 id="heading">Welcome back</h2>
+      <p class="sub" id="subheading">Sign in to see your progress and start a new interview.</p>
 
-  <div class="field" id="nameField">
-    <label>Full Name</label>
-    <input type="text" id="nameInput" placeholder="John Smith" autocomplete="name" />
-  </div>
-  <div class="field">
-    <label>Email</label>
-    <input type="email" id="emailInput" placeholder="you@example.com" autocomplete="email" />
-  </div>
-  <div class="field">
-    <label>Password</label>
-    <input type="password" id="passwordInput" placeholder="••••••••" autocomplete="current-password" />
-  </div>
+      <button class="btn google-btn" id="googleBtn" type="button" onclick="signInWithGoogle()">
+        <svg viewBox="0 0 48 48" aria-hidden="true">
+          <path fill="#FFC107" d="M43.6 20.1H42V20H24v8h11.3C33.7 32.7 29.2 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.1 7.9 3l5.7-5.7C34.5 6.5 29.5 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.6-.4-3.9z"/>
+          <path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.7 16.1 19 13 24 13c3.1 0 5.8 1.1 7.9 3l5.7-5.7C34.5 6.5 29.5 4 24 4 16.3 4 9.7 8.3 6.3 14.7z"/>
+          <path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2C29.2 35.3 26.7 36 24 36c-5.2 0-9.6-3.3-11.3-8H6.1C9.5 35.6 16.2 44 24 44z"/>
+          <path fill="#1976D2" d="M43.6 20.1H42V20H24v8h11.3c-.8 2.3-2.4 4.2-4.4 5.5l6.2 5.2C36.9 39.6 44 34 44 24c0-1.3-.1-2.6-.4-3.9z"/>
+        </svg>
+        <span id="googleLabel">Continue with Google</span>
+        <span class="spinner" aria-hidden="true"></span>
+      </button>
 
-  <button class="submit-btn" id="submitBtn" onclick="handleSubmit()">
-    <span class="btn-label" id="btnLabel">Sign In</span>
-    <div class="spinner"></div>
-  </button>
+      <div class="divider"><span>or use your email</span></div>
 
-  <div class="alert" id="alertBox"></div>
+      <form id="authForm" novalidate>
+        <div class="field" id="nameField" hidden>
+          <label for="nameInput">Full name</label>
+          <input type="text" id="nameInput" placeholder="Your name" autocomplete="name" />
+          <p class="field-error" id="nameError"></p>
+        </div>
+        <div class="field">
+          <label for="emailInput">Email</label>
+          <input type="email" id="emailInput" placeholder="you@example.com" autocomplete="email" />
+          <p class="field-error" id="emailError"></p>
+        </div>
+        <div class="field">
+          <label for="passwordInput">Password</label>
+          <div class="password-wrap">
+            <input type="password" id="passwordInput" placeholder="Your password" autocomplete="current-password" />
+            <button class="show-btn" id="showBtn" type="button" onclick="togglePassword()" aria-label="Show password">Show</button>
+          </div>
+          <p class="field-hint" id="passwordHint" hidden>At least 6 characters.</p>
+          <p class="field-error" id="passwordError"></p>
+        </div>
 
-  <div class="divider">or</div>
+        <div class="alert" id="alertBox" role="status" aria-live="polite"></div>
 
-  <button class="google-btn" onclick="signInWithGoogle()">
-    <svg viewBox="0 0 48 48">
-      <path fill="#FFC107" d="M43.6 20.1H42V20H24v8h11.3C33.7 32.7 29.2 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.1 7.9 3l5.7-5.7C34.5 6.5 29.5 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.6-.4-3.9z"/>
-      <path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.7 16.1 19 13 24 13c3.1 0 5.8 1.1 7.9 3l5.7-5.7C34.5 6.5 29.5 4 24 4 16.3 4 9.7 8.3 6.3 14.7z"/>
-      <path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2C29.2 35.3 26.7 36 24 36c-5.2 0-9.6-3.3-11.3-8H6.1C9.5 35.6 16.2 44 24 44z"/>
-      <path fill="#1976D2" d="M43.6 20.1H42V20H24v8h11.3c-.8 2.3-2.4 4.2-4.4 5.5l6.2 5.2C36.9 39.6 44 34 44 24c0-1.3-.1-2.6-.4-3.9z"/>
-    </svg>
-    Continue with Google
-  </button>
+        <button class="btn primary submit-btn" id="submitBtn" type="submit">
+          <span id="btnLabel">Sign in</span>
+          <span class="spinner" aria-hidden="true"></span>
+        </button>
+      </form>
+
+      <p class="switch">
+        <span id="switchText">New to InterviewAI?</span>
+        <button class="link-btn" id="switchBtn" type="button" onclick="switchMode()">Create an account</button>
+      </p>
+    </div>
+  </main>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>

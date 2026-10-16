@@ -1,124 +1,102 @@
-/* Sign-in page. Colours come from theme.css so it matches the rest of the app. */
-*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-        body {
-      font-family: 'DM Sans', sans-serif;
-      background: var(--bg);
-      color: var(--text-primary);
-      min-height: 100vh;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      padding: 24px;
-    }
-    body::before {
-      content: '';
-      position: fixed; inset: 0;
-      background-image: radial-gradient(var(--border) 1px, transparent 1px);
-      background-size: 28px 28px;
-      opacity: .6;
-      pointer-events: none;
-    }
-    .card {
-      position: relative;
-      background: var(--surface);
-      border: 1.5px solid var(--border);
-      border-radius: 20px;
-      padding: 40px 36px;
-      width: 100%; max-width: 420px;
-      box-shadow: 0 8px 40px rgba(14,165,233,0.12);
-    }
-    .logo {
-      display: flex; align-items: center; gap: 8px;
-      font-size: 18px; font-weight: 600;
-      color: var(--accent-dark); margin-bottom: 6px;
-    }
-    .logo-dot {
-      width: 28px; height: 28px;
-      background: var(--accent); border-radius: 8px;
-      display: grid; place-items: center;
-    }
-    .logo-dot svg { width: 16px; height: 16px; fill: var(--accent-ink); }
-    .tagline { font-size: 13px; color: var(--text-muted); margin-bottom: 28px; }
-    .tabs {
-      display: flex;
-      background: var(--bg);
-      border: 1.5px solid var(--border2);
-      border-radius: 12px; padding: 4px;
-      margin-bottom: 24px;
-    }
-    .tab {
-      flex: 1; padding: 8px; border: none;
-      background: transparent; color: var(--text-muted);
-      font-family: 'DM Sans', sans-serif;
-      font-size: 14px; font-weight: 500;
-      border-radius: 9px; cursor: pointer;
-      transition: all .15s;
-    }
-    .tab.active {
-      background: var(--surface); color: var(--accent-dark);
-      box-shadow: 0 1px 4px rgba(14,165,233,0.15);
-    }
-    .field { margin-bottom: 14px; }
-    label {
-      display: block; font-size: 11px; font-weight: 600;
-      letter-spacing: .06em; text-transform: uppercase;
-      color: var(--text-muted); margin-bottom: 6px;
-    }
-    input {
-      width: 100%; background: var(--surface2);
-      border: 1.5px solid var(--border2); border-radius: 10px;
-      padding: 11px 14px; font-family: 'DM Sans', sans-serif;
-      font-size: 14px; color: var(--text-primary);
-      outline: none; transition: border-color .15s, box-shadow .15s;
-    }
-    input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(14,165,233,.12); }
-    input::placeholder { color: var(--text-muted); opacity: .5; }
-    .submit-btn {
-      width: 100%; margin-top: 6px; padding: 12px;
-      background: var(--accent); color: var(--accent-ink);
-      border: none; border-radius: 10px;
-      font-family: 'DM Sans', sans-serif;
-      font-size: 15px; font-weight: 600; cursor: pointer;
-      transition: background .15s, transform .1s;
-      display: flex; align-items: center; justify-content: center;
-      gap: 8px; min-height: 44px;
-    }
-    .submit-btn:hover:not(:disabled) { background: var(--accent-dark); }
-    .submit-btn:active:not(:disabled) { transform: scale(.98); }
-    .submit-btn:disabled { opacity: .55; cursor: not-allowed; }
-    .spinner {
-      width: 16px; height: 16px;
-      border: 2px solid rgba(255,255,255,.35);
-      border-top-color: var(--accent-ink); border-radius: 50%;
-      animation: spin .65s linear infinite; display: none;
-    }
-    @keyframes spin { to { transform: rotate(360deg); } }
-    .submit-btn.loading .btn-label { display: none; }
-    .submit-btn.loading .spinner  { display: block; }
-    .divider {
-      display: flex; align-items: center; gap: 12px;
-      margin: 18px 0; font-size: 12px; color: var(--text-muted);
-    }
-    .divider::before, .divider::after {
-      content: ''; flex: 1; height: 1px; background: var(--border2);
-    }
-    .google-btn {
-      width: 100%; padding: 11px;
-      background: var(--surface); color: var(--text-primary);
-      border: 1.5px solid var(--border2); border-radius: 10px;
-      font-family: 'DM Sans', sans-serif;
-      font-size: 14px; font-weight: 500; cursor: pointer;
-      display: flex; align-items: center; justify-content: center;
-      gap: 10px; transition: border-color .15s, background .15s;
-    }
-    .google-btn:hover { border-color: var(--accent); background: var(--surface2); }
-    .google-btn svg { width: 18px; height: 18px; flex-shrink: 0; }
-    .alert {
-      padding: 10px 14px; border-radius: 10px;
-      font-size: 13px; margin-top: 14px;
-      line-height: 1.5; display: none;
-    }
-    .alert.show    { display: block; }
-    .alert.error   { background: #fef2f2; border: 1px solid #fecaca; color: #b91c1c; }
-    .alert.success { background: #f0fdf4; border: 1px solid #a7f3d0; color: #065f46; }
-    #nameField { display: none; }
+/* Sign-in page. Tokens, buttons and the brand mark come from theme.css. */
+.auth-shell { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); min-height: 100vh; }
+
+/* Left panel */
+.auth-side {
+  background: var(--surface); border-right: 1px solid var(--line);
+  padding: 28px 40px; display: flex; flex-direction: column; gap: 24px;
+}
+.auth-side .brand { padding: 0; }
+.side-body { margin: auto 0; max-width: 460px; display: flex; flex-direction: column; gap: 14px; }
+.side-body h1 {
+  font-family: var(--display); font-weight: 600; font-size: 34px; line-height: 1.15;
+  letter-spacing: -.01em; margin: 0; text-wrap: balance;
+}
+.side-body p { margin: 0; color: var(--ink-2); max-width: 44ch; }
+.sample {
+  margin-top: 10px; border: 1px solid var(--line); border-radius: var(--r); background: var(--surface-2);
+  padding: 16px 18px; display: flex; flex-direction: column; gap: 10px;
+}
+.sample-head { display: flex; justify-content: space-between; align-items: baseline; }
+.sample-score { font-size: 22px; font-weight: 700; }
+.sample-score small { font-size: 12px; color: var(--muted); font-weight: 500; }
+.sample-row { display: grid; grid-template-columns: 130px minmax(0, 1fr) 32px; gap: 10px; align-items: center; font-size: 13px; color: var(--ink-2); }
+.sample-row b { text-align: right; color: var(--ink); }
+.sample .bar { height: 7px; background: var(--surface); border: 1px solid var(--line-soft); border-radius: 999px; overflow: hidden; display: block; }
+.sample .bar span { display: block; height: 100%; border-radius: 999px; }
+.theme-btn {
+  align-self: flex-start; display: inline-flex; align-items: center; gap: 8px; border: 0; background: none;
+  color: var(--muted); font-size: 13px; padding: 6px 0;
+}
+.theme-btn svg { width: 16px; height: 16px; }
+.theme-btn:hover { color: var(--ink); }
+
+/* Right: the card */
+.auth-main { display: grid; place-items: center; padding: 32px 24px; }
+.auth-card { width: 100%; max-width: 400px; display: flex; flex-direction: column; gap: 16px; }
+.auth-card h2 { font-family: var(--display); font-weight: 600; font-size: 28px; margin: 0; letter-spacing: -.01em; }
+.auth-card .sub { margin: -8px 0 4px; }
+
+.google-btn { width: 100%; padding: 11px 16px; font-size: 14.5px; position: relative; }
+.google-btn svg { width: 18px; height: 18px; }
+
+.divider { display: flex; align-items: center; gap: 12px; color: var(--muted); font-size: 12.5px; }
+.divider::before, .divider::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+
+form { display: flex; flex-direction: column; gap: 14px; }
+.field { display: flex; flex-direction: column; gap: 6px; }
+.label-row { display: flex; justify-content: space-between; align-items: baseline; }
+label { font-size: 13px; font-weight: 600; color: var(--ink); }
+input {
+  width: 100%; font: inherit; font-size: 14.5px; color: var(--ink);
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-sm);
+  padding: 10px 12px; transition: border-color .15s, box-shadow .15s;
+}
+input::placeholder { color: var(--muted); }
+input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.field.invalid input { border-color: var(--bad); }
+.field.invalid input:focus { box-shadow: 0 0 0 3px var(--bad-soft); }
+.field-error { margin: 0; font-size: 12.5px; color: var(--bad); min-height: 0; }
+.field-error:empty { display: none; }
+.field-hint { margin: 0; font-size: 12.5px; color: var(--muted); }
+.field.invalid .field-hint { display: none; }
+
+.password-wrap { position: relative; }
+.password-wrap input { padding-right: 64px; }
+.show-btn {
+  position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
+  border: 0; background: none; color: var(--accent); font-size: 12.5px; font-weight: 600; padding: 6px 8px; border-radius: 6px;
+}
+.show-btn:hover { background: var(--accent-soft); }
+
+.link-btn { border: 0; background: none; padding: 0; color: var(--accent); font-size: 13px; font-weight: 600; }
+.link-btn:hover { text-decoration: underline; }
+.link-btn:disabled { opacity: .5; cursor: default; text-decoration: none; }
+
+.submit-btn { width: 100%; padding: 11px 16px; font-size: 14.5px; margin-top: 2px; }
+
+/* Loading: label stays, spinner appears */
+.spinner {
+  width: 15px; height: 15px; border-radius: 50%; display: none;
+  border: 2px solid color-mix(in srgb, currentColor 30%, transparent); border-top-color: currentColor;
+  animation: spin .7s linear infinite;
+}
+.btn.loading .spinner { display: inline-block; }
+.btn.loading { cursor: default; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.alert { display: none; font-size: 13.5px; padding: 10px 12px; border-radius: var(--r-sm); }
+.alert.show { display: block; }
+.alert.error { background: var(--bad-soft); color: var(--bad); }
+.alert.success { background: var(--good-soft); color: var(--good); }
+
+.switch { margin: 4px 0 0; text-align: center; font-size: 13.5px; color: var(--muted); display: flex; gap: 6px; justify-content: center; flex-wrap: wrap; }
+
+@media (max-width: 860px) {
+  .auth-shell { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto 1fr; }
+  .auth-side { border-right: 0; border-bottom: 1px solid var(--line); padding: 20px 16px; gap: 12px; flex-direction: row; align-items: center; justify-content: space-between; }
+  .side-body { display: none; }
+  .theme-btn { align-self: center; }
+  .theme-btn span { display: none; }
+  .auth-main { place-items: start center; padding: 28px 16px 40px; }
+}

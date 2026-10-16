@@ -219,7 +219,7 @@ async def interview(request: InterviewRequest, user=Depends(get_current_user)):
         parse_ok=True
         if "evaluation_update" in parsed:
             session["evaluation_state"] = parsed["evaluation_update"]
-        history.append({"user": user_answer, "ai": parsed})
+        history.append({"user": user_answer, "ai": parsed, "question": asked_question, "parse_ok": parse_ok})
         min_questions=5
         if parsed.get("decision","continue")=="stop":
             if len(history)<min_questions:
@@ -235,7 +235,7 @@ async def interview(request: InterviewRequest, user=Depends(get_current_user)):
         "feedback": "Could not parse feedback",
         "score": 0
     }
-        history.append({ "user": user_answer, "ai": parsed })
+        history.append({ "user": user_answer, "ai": parsed, "question": asked_question, "parse_ok": parse_ok })
 
     # Save this turn to chat_history right away, so per-question data isn't lost if the interview is never ended.
     # The opening call (no previous question yet) only produces the intro question, so there's nothing to save.
@@ -262,22 +262,50 @@ async def interview(request: InterviewRequest, user=Depends(get_current_user)):
     return parsed
 
 
+# answered_turns pairs each answer with the question it actually responds to.
+# In history, entry["ai"]["question"] is the NEXT question, so the question being answered is
+# entry["question"], or the previous entry's ai question for interviews saved before that key existed.
+# The opening turn (no question asked yet) and turns where the LLM response couldn't be parsed are skipped.
+def answered_turns(history):
+    turns=[]
+    for i, entry in enumerate(history):
+        if "question" in entry:
+            question=entry["question"]
+        else:
+            question=history[i-1]["ai"].get("question","") if i>0 else ""
+        parse_ok=entry.get("parse_ok", entry["ai"].get("feedback") != "Could not parse feedback")
+        if not question or not parse_ok:
+            continue
+        turns.append({
+            "question": question,
+            "answer": entry["user"],
+            "score": entry["ai"].get("score",0),
+            "feedback": entry["ai"].get("feedback","")
+        })
+    return turns
+
+
 @app.post("/end_interview")
 async def end_interview(request: InterviewRequest, user=Depends(get_current_user)):
     session = load_session(request.session_id, user)   # also does the ownership check
     if not session:
         return {"error": "Invalid session ID"}
     history =session["history"]
-    if not history:
+    # Only answers to a real question that the LLM graded properly count towards the final score and feedback.
+    turns=answered_turns(history)
+    if not turns:
         return {'ai':'no interview data found'}
     scores=[]
-    for cnvo in history:
-        scores.append(cnvo["ai"].get("score",0))
+    for turn in turns:
+        try:
+            scores.append(float(turn["score"]))
+        except (TypeError, ValueError):
+            scores.append(0)
     session["completed"]=True
     avg_score=round((sum(scores)/len(scores)),2) if scores else 0
 
     #change to llm feedbacking
-    feedbackdata=llmfeedback(history)
+    feedbackdata=llmfeedback(turns)
     cleaned=re.sub(r"```json|```", "", feedbackdata).strip()
     try:
         parsed=json.loads(cleaned)
@@ -311,7 +339,7 @@ async def end_interview(request: InterviewRequest, user=Depends(get_current_user
         print(f"error updating interview status: {e}")
 
     return {
-        "total_questions":len(history),
+        "total_questions":len(turns),
         "average_score":avg_score,
         "llm_score":parsed.get("score",0),
         "feedback":parsed.get("feedback","No feedback provided"),

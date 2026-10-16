@@ -199,7 +199,7 @@ async function askAI() {
       addAIMessage(data.question);
       // Add feedback card
       addFeedbackCard(data.feedback, data.score);
-      if (data.skill_state) renderCoverage(data.skill_state, data.target_skill);
+      if (data.skill_state) renderCoverage(data.skill_state, data.target_skill, data.settled);
 
       // Update stats — only for answers the server counts towards the final report
       // (not the opening turn or unparseable AI responses), so the numbers match the report.
@@ -467,21 +467,21 @@ function addReportCard(data) {
 
 // ── Skill coverage panel ──────────────────────────────────────────────────────
 // Shows how many scored answers each rubric skill has (the server's evaluation state),
-// out of the 2 needed to settle it, and which skill the next question assesses.
+// whether the server considers it settled (services/rubric.py is_settled), and which skill the next question assesses.
 const COVERAGE_SKILLS = [
   ["communication", "Communication"],
   ["technical_depth", "Technical depth"],
   ["problem_solving", "Problem solving"],
   ["project_experience", "Project experience"],
 ];
-const EVIDENCE_NEEDED = 2;   // MIN_EVIDENCE_PER_SKILL in services/rubric.py
+const EVIDENCE_NEEDED = 2;   // dots drawn per skill, MIN_EVIDENCE_PER_SKILL in services/rubric.py
 
-function renderCoverage(state, nextSkill) {
+function renderCoverage(state, nextSkill, settledBySkill) {
   const el = document.getElementById("coverage");
   if (!el) return;
   el.innerHTML = COVERAGE_SKILLS.map(([key, label]) => {
     const entry = (state && state[key]) || { count: 0, avg: 0 };
-    const settled = entry.count >= EVIDENCE_NEEDED || (entry.count >= 1 && (entry.avg <= 3 || entry.avg >= 8));
+    const settled = Boolean(settledBySkill && settledBySkill[key]);
     const cls = settled ? "done" : key === nextSkill ? "next" : "";
     const status = settled ? "settled" : key === nextSkill ? "next" : `${entry.count}/${EVIDENCE_NEEDED}`;
     const dots = Array.from({ length: EVIDENCE_NEEDED }, (_, i) =>

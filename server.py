@@ -3,7 +3,7 @@ from fastapi import Header, HTTPException, Depends
 from services.llmcalling import llmcalling
 from services.pdfreading import extract_text_pymupdf
 from services.llmfeedback import llmfeedback
-from services.rubric import RUBRIC_VERSION, SKILLS, rubric_text, empty_state, normalize_state, add_score, pick_target_skill, should_stop
+from services.rubric import RUBRIC_VERSION, SKILLS, rubric_text, empty_state, normalize_state, add_score, pick_target_skill, should_stop, is_settled
 from services.stt import sst
 from pydantic import BaseModel # For defining data models for request and response bodies in FastAPI.
 import os
@@ -169,7 +169,15 @@ async def start_interview(request: Optional[StartRequest] = None, user=Depends(g
     try:
         response=supabase.table("interviews").insert(row).execute()
     except Exception as e:
-        return {"error": f"Failed to create interview session in the database: {e}"}
+        if "focus_topic" not in row:
+            return {"error": f"Failed to create interview session in the database: {e}"}
+        # most likely migrations/004_dashboard.sql hasn't been run yet, so start a normal interview instead
+        print(f"error saving focus topic, starting without it: {e}")
+        row.pop("focus_topic")
+        try:
+            response=supabase.table("interviews").insert(row).execute()
+        except Exception as e:
+            return {"error": f"Failed to create interview session in the database: {e}"}
     
     if not response.data or len(response.data) == 0:
         return {"error": "Failed to create interview session in the database: No data returned"}
@@ -285,7 +293,8 @@ async def interview(request: InterviewRequest, user=Depends(get_current_user)):
     # and the per-skill evidence for the coverage panel,
     # on a copy so it isn't stored in history and doesn't end up in the LLM prompt.
     return {**parsed, "counted": bool(asked_question) and parse_ok,
-            "skill_state": evaluation_state, "target_skill": target_skill}
+            "skill_state": evaluation_state, "target_skill": target_skill,
+            "settled": {skill: is_settled(entry) for skill, entry in evaluation_state.items()}}
 
 
 # answered_turns pairs each answer with the question it actually responds to.
@@ -424,7 +433,13 @@ def mean(values):
 # finished_interviews returns the user's interviews that have a report, oldest first,
 # each with its report merged in: [{"interview": row, "report": row}, ...]
 def finished_interviews(user_id):
-    interviews=supabase.table("interviews").select("*").eq("user_id", user_id).execute().data or []
+    # Only the columns the dashboard needs, not every interview's history and resume.
+    # focus_topic comes from migrations/004_dashboard.sql, so load without it if that hasn't been run yet.
+    try:
+        interviews=supabase.table("interviews").select("id, created_at, ended_at, focus_topic").eq("user_id", user_id).execute().data or []
+    except Exception as e:
+        print(f"error loading interviews with focus_topic, retrying without it: {e}")
+        interviews=supabase.table("interviews").select("id, created_at, ended_at").eq("user_id", user_id).execute().data or []
     ids=[row["id"] for row in interviews]
     reports=supabase.table("reports").select("*").in_("interview_id", ids).execute().data if ids else []
     by_interview={}
@@ -479,8 +494,9 @@ async def dashboard(user=Depends(get_current_user)):
             key=topic.get("topic","").strip().lower()
             if not key:
                 continue
-            entry=weak.setdefault(key, {**topic, "count": 0, "last_seen": interview_time(item["interview"], item["report"])})
+            entry=weak.setdefault(key, {**topic, "count": 0})
             entry["count"]+=1
+            entry["last_seen"]=interview_time(item["interview"], item["report"])   # finished is oldest first, so this ends as the latest
             entry["why"]=topic.get("why") or entry["why"]     # keep the most recent explanation
     weak_topics=sorted(weak.values(), key=lambda t: t["last_seen"], reverse=True)   # newest first among ties
     weak_topics=sorted(weak_topics, key=lambda t: t["count"], reverse=True)[:5]

@@ -108,6 +108,7 @@
 .record-btn:hover { border-color: var(--accent); color: var(--accent); }
 .record-btn svg { width: 15px; height: 15px; }
 .record-btn.recording { background: var(--bad); border-color: var(--bad); color: #fff; animation: pulse 1.4s infinite; }
+.voice-btn.off { opacity: .55; text-decoration: line-through; }
 @keyframes pulse { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--bad) 45%, transparent); } 100% { box-shadow: 0 0 0 10px transparent; } }
 .kbd-hint { font-size: 12px; color: var(--muted); }
 .input-spacer { flex: 1; }

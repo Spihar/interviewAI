@@ -8,6 +8,7 @@ from services.stt import sst
 from pydantic import BaseModel # For defining data models for request and response bodies in FastAPI.
 import os
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.concurrency import run_in_threadpool
 from typing import List, Dict
 import uuid 
 import json
@@ -550,10 +551,17 @@ async def get_report(interview_id: str, user=Depends(get_current_user)):
 
 
 @app.post("/speech_to_text")
-async def speech_to_text(file: fastapi.UploadFile = fastapi.File(...)):
-    file_location = f"temp/{file.filename}"
+async def speech_to_text(file: fastapi.UploadFile = fastapi.File(...), user=Depends(get_current_user)):
+    # A unique name per upload so two people speaking at once don't overwrite each other's audio.
+    os.makedirs("temp", exist_ok=True)
+    file_location = f"temp/{uuid.uuid4().hex}.webm"
     with open(file_location, "wb") as f:
         f.write(await file.read())
-    text = sst(file_location)
-    os.remove(file_location)  # Clean up the temporary file
+    try:
+        text = await run_in_threadpool(sst, file_location)
+    except Exception as e:
+        print("Transcription failed:", e)
+        raise HTTPException(status_code=502, detail="Transcription failed, please try again or type your answer")
+    finally:
+        os.remove(file_location)  # Clean up the temporary file
     return {"text": text}

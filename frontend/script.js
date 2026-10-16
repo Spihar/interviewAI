@@ -5,6 +5,7 @@ let audioChunks = [];
 let isRecording = false;
 let questionCount = 0;
 let totalScore = 0;
+let voiceOn = localStorage.getItem("voiceOn") !== "false"; // read AI questions aloud
 
 // ── Supabase client setup ─────────────────────────────────────────────────────
 // Supabase is our authentication provider. It handles user accounts, login, and JWT management.
@@ -280,6 +281,7 @@ async function toggleRecording() {
 async function startRecording() {
   try {
     audioChunks = [];
+    stopSpeaking(); // don't let the mic pick up the AI's voice
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     mediaRecorder = new MediaRecorder(stream);
     mediaRecorder.ondataavailable = (e) => audioChunks.push(e.data);
@@ -316,6 +318,7 @@ function stopRecording() {
 
       const res = await fetch(`${API_BASE}/speech_to_text`, { method: "POST", headers: authHeaders(), body: formData });
       const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || "Transcription failed");
       document.getElementById("history").value = data.text;
       document.getElementById("charCount").textContent = data.text.length;
       setStatus("Transcription done — review and send");
@@ -358,7 +361,43 @@ function addAIMessage(text) {
   `;
   chat.appendChild(row);
   scrollToBottom();
+  speak(text);
 }
+
+// ── Read-aloud (browser text-to-speech) ───────────────────────────────────────
+// Uses the browser's built-in speechSynthesis, so it costs nothing and needs no server.
+function speak(text) {
+  if (!voiceOn || !("speechSynthesis" in window)) return;
+  stopSpeaking();
+  const utterance = new SpeechSynthesisUtterance(text);
+  const voices = window.speechSynthesis.getVoices();
+  utterance.voice = voices.find((v) => v.lang.startsWith("en") && /natural|google|online/i.test(v.name))
+    || voices.find((v) => v.lang.startsWith("en")) || null;
+  utterance.rate = 1;
+  window.speechSynthesis.speak(utterance);
+}
+
+function stopSpeaking() {
+  if ("speechSynthesis" in window) window.speechSynthesis.cancel();
+}
+
+function toggleVoice() {
+  voiceOn = !voiceOn;
+  localStorage.setItem("voiceOn", voiceOn);
+  if (!voiceOn) stopSpeaking();
+  renderVoiceBtn();
+}
+
+function renderVoiceBtn() {
+  const btn = document.getElementById("voiceBtn");
+  if (!btn) return;
+  btn.classList.toggle("off", !voiceOn);
+  btn.title = voiceOn ? "AI reads questions aloud (click to mute)" : "Voice muted (click to turn on)";
+  document.getElementById("voiceLabel").textContent = voiceOn ? "Voice on" : "Voice off";
+}
+
+if ("speechSynthesis" in window) window.speechSynthesis.onvoiceschanged = () => {};
+document.addEventListener("DOMContentLoaded", renderVoiceBtn);
 
 function addFeedbackCard(feedback, score) {
   const chat = document.getElementById("chat");

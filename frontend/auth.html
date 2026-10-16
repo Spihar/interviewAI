@@ -52,18 +52,18 @@
       <form id="authForm" novalidate>
         <div class="field" id="nameField" hidden>
           <label for="nameInput">Full name</label>
-          <input type="text" id="nameInput" placeholder="Your name" autocomplete="name" />
+          <input type="text" id="nameInput" aria-describedby="nameError" placeholder="Your name" autocomplete="name" />
           <p class="field-error" id="nameError"></p>
         </div>
         <div class="field">
           <label for="emailInput">Email</label>
-          <input type="email" id="emailInput" placeholder="you@example.com" autocomplete="email" />
+          <input type="email" id="emailInput" aria-describedby="emailError" placeholder="you@example.com" autocomplete="email" />
           <p class="field-error" id="emailError"></p>
         </div>
         <div class="field">
           <label for="passwordInput">Password</label>
           <div class="password-wrap">
-            <input type="password" id="passwordInput" placeholder="Your password" autocomplete="current-password" />
+            <input type="password" id="passwordInput" aria-describedby="passwordHint passwordError" placeholder="Your password" autocomplete="current-password" />
             <button class="show-btn" id="showBtn" type="button" onclick="togglePassword()" aria-label="Show password">Show</button>
           </div>
           <p class="field-hint" id="passwordHint" hidden>At least 6 characters.</p>
@@ -86,7 +86,7 @@
   </main>
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4"></script>
 <script src="auth.js"></script>
 </body>
 </html>

@@ -29,7 +29,7 @@ const COPY = {
 // If yes, skip this page and go straight to the dashboard.
 window.onload = async () => {
   const { data: { session } } = await sb.auth.getSession();
-  if (session) window.location.href = "dashboard.html";
+  if (session) { window.location.href = "dashboard.html"; return; }
 
   // Supabase sends OAuth errors back in the URL, e.g. when Google sign-in isn't enabled.
   const params = new URLSearchParams(window.location.search + "&" + window.location.hash.slice(1));
@@ -94,8 +94,8 @@ async function handleSubmit() {
       const { error } = await sb.auth.signInWithPassword({ email, password });
       if (error) { showAlert(friendlyError(error.message), "error"); setLoading("submitBtn", false); return; }
     } else {
-      // Creates the user in Supabase Auth.
-      // full_name goes into user_metadata; the handle_new_user DB trigger copies it into public.profiles.
+      // Creates the user in Supabase Auth. full_name is saved in user_metadata,
+      // and the dashboard reads it from there to greet the user.
       const { data, error } = await sb.auth.signUp({
         email, password,
         options: { data: { full_name: name } }
@@ -124,12 +124,17 @@ async function signInWithGoogle() {
   // Google must be enabled in Supabase Dashboard → Authentication → Providers → Google.
   hideAlert();
   setLoading("googleBtn", true);
-  const { error } = await sb.auth.signInWithOAuth({
-    provider: "google",
-    options: { redirectTo: window.location.origin + "/dashboard.html" }
-  });
-  if (error) {
-    showAlert(friendlyError(error.message), "error");
+  try {
+    const { error } = await sb.auth.signInWithOAuth({
+      provider: "google",
+      options: { redirectTo: window.location.origin + "/dashboard.html" }
+    });
+    if (error) {
+      showAlert(friendlyError(error.message), "error");
+      setLoading("googleBtn", false);
+    }
+  } catch (err) {
+    showAlert("Couldn't reach Google sign-in. Check your connection and try again.", "error");
     setLoading("googleBtn", false);
   }
 }
@@ -155,12 +160,16 @@ function togglePassword() {
 }
 
 function setFieldError(field, msg) {
+  const input = document.getElementById(field + "Input");
   document.getElementById(field + "Error").textContent = msg;
-  document.getElementById(field + "Input").closest(".field").classList.add("invalid");
+  input.closest(".field").classList.add("invalid");
+  input.setAttribute("aria-invalid", "true");
 }
 function clearFieldError(field) {
+  const input = document.getElementById(field + "Input");
   document.getElementById(field + "Error").textContent = "";
-  document.getElementById(field + "Input").closest(".field").classList.remove("invalid");
+  input.closest(".field").classList.remove("invalid");
+  input.removeAttribute("aria-invalid");
 }
 
 // While one button is working, both are disabled so the user can't start two sign-ins at once.
@@ -172,5 +181,6 @@ function showAlert(msg, type) {
   const box = document.getElementById("alertBox");
   box.textContent = msg;
   box.className = `alert ${type} show`;
+  box.setAttribute("role", type === "error" ? "alert" : "status");   // errors are announced right away
 }
 function hideAlert() { document.getElementById("alertBox").className = "alert"; }

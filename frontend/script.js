@@ -340,7 +340,7 @@ function stopRecording() {
 
       document.getElementById("history").value = "Transcribing…";
 
-      const res = await fetch(`${API_BASE}/speech_to_text`, { method: "POST", headers: authHeaders(), body: formData });
+      const res = await fetch(`${API_BASE}/speech_to_text?session_id=${encodeURIComponent(session_id)}`, { method: "POST", headers: authHeaders(), body: formData });
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail || "Transcription failed");
       pendingSttMs = Number.isFinite(data.stt_ms) ? data.stt_ms : null;

@@ -93,6 +93,7 @@ def load_session(session_id, user):
         "evaluation_state": normalize_state(row.get("evaluation_state")),   # old flat-shaped states reset to zero counts
         "completed": row.get("completed") or False,
         "focus_topic": row.get("focus_topic"),
+        "consent_given": row.get("consent_given") or False,
         "interview_id": row["id"]
     }
 
@@ -167,6 +168,13 @@ class StartRequest(BaseModel):
     focus_topic: Optional[str] = None
     consent: bool = False
 
+# check_consent_columns turns a missing consent_given/consent_at column into a clear 500,
+# logging the database error here instead of sending it to the client.
+def check_consent_columns(error):
+    if "consent_" in str(error):
+        print(f"error saving consent, consent columns missing: {error}")
+        raise HTTPException(status_code=500, detail="Database not migrated: run migrations/005_consent_timing.sql")
+
 # The /start_interview endpoint is responsible for initiating a new interview session.
 # When a client makes a POST request to this endpoint, we create a new row in the interviews table
 # with an empty history and evaluation state, and return its id as the session ID.
@@ -193,6 +201,7 @@ async def start_interview(request: Optional[StartRequest] = None, user=Depends(g
     try:
         response=supabase.table("interviews").insert(row).execute()
     except Exception as e:
+        check_consent_columns(e)
         if "focus_topic" not in row:
             return {"error": f"Failed to create interview session in the database: {e}"}
         # most likely migrations/004_dashboard.sql hasn't been run yet, so start a normal interview instead
@@ -201,6 +210,7 @@ async def start_interview(request: Optional[StartRequest] = None, user=Depends(g
         try:
             response=supabase.table("interviews").insert(row).execute()
         except Exception as e:
+            check_consent_columns(e)
             return {"error": f"Failed to create interview session in the database: {e}"}
     
     if not response.data or len(response.data) == 0:
@@ -314,13 +324,14 @@ async def interview(request: InterviewRequest, user=Depends(get_current_user)):
         try:
             supabase.table("chat_history").insert(turn_row).execute()
         except Exception as e:
-            # most likely migrations/005_consent_timing.sql hasn't been run yet, so keep the turn without stt_ms
-            print(f"error saving chat history with stt_ms, retrying without it: {e}")
-            turn_row.pop("stt_ms")
-            try:
-                supabase.table("chat_history").insert(turn_row).execute()
-            except Exception as e:
-                print(f"error saving chat history to database: {e}")
+            print(f"error saving chat history to database: {e}")
+            # the stt_ms column is missing (migrations/005_consent_timing.sql not run), so keep the turn without it
+            if "stt_ms" in str(e):
+                turn_row.pop("stt_ms")
+                try:
+                    supabase.table("chat_history").insert(turn_row).execute()
+                except Exception as e:
+                    print(f"error saving chat history without stt_ms: {e}")
 
     save_session(session)   # persist history/evaluation state so the interview survives restarts
     print(f"Session {request.session_id} history: {history}")
@@ -607,7 +618,12 @@ async def get_report(interview_id: str, user=Depends(get_current_user)):
 
 
 @app.post("/speech_to_text")
-async def speech_to_text(file: fastapi.UploadFile = fastapi.File(...), user=Depends(get_current_user)):
+async def speech_to_text(file: fastapi.UploadFile = fastapi.File(...), session_id: Optional[str] = None, user=Depends(get_current_user)):
+    # When the frontend passes its interview, audio is only transcribed if that interview has consent.
+    if session_id:
+        session = load_session(session_id, user)   # also does the ownership check
+        if not session or not session["consent_given"]:
+            raise HTTPException(status_code=403, detail="Please accept the privacy note before recording")
     # A unique name per upload so two people speaking at once don't overwrite each other's audio.
     data = await file.read()
     if len(data) > MAX_UPLOAD_BYTES:

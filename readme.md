@@ -33,6 +33,10 @@ SUPABASE_KEY=your_supabase_key
 
 Replace the values with your actual API credentials.
 
+SUPABASE_KEY must be the **secret** key (sb_secret_…, from Supabase Project settings → API keys), not the publishable key.
+The backend writes to tables protected by row-level security, which only the secret key can bypass.
+Use the secret key on any deploy host too, and never put it in the frontend.
+
 ⚠️ Never commit your .env file or API keys to GitHub.
 
 Add .env to .gitignore:
@@ -40,6 +44,21 @@ Add .env to .gitignore:
 .env
 venv/
 __pycache__/
+
+**Database migrations**
+
+Run the files in migrations/ in the Supabase SQL editor, in number order, before starting the new server code.
+005_consent_timing.sql must be run before 006_rls.sql.
+
+Before running 006_rls.sql, check the type of interviews.user_id:
+
+select data_type from information_schema.columns where table_name='interviews' and column_name='user_id';
+
+If it is text, change (select auth.uid()) to (select auth.uid())::text in the three policies in 006_rls.sql.
+
+After running 006_rls.sql, list any public tables still without row-level security:
+
+select tablename from pg_tables where schemaname='public' and not rowsecurity;
 
 **5. Start the FastAPI server using Uvicorn:**
 

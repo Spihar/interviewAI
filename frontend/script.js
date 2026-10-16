@@ -184,20 +184,30 @@ async function askAI() {
       // Add feedback card
       addFeedbackCard(data.feedback, data.score);
 
+      // Update stats — only for answers the server counts towards the final report
+      // (not the opening turn or unparseable AI responses), so the numbers match the report.
+      // Done before the stop check so the last answer is included.
+      if (data.counted) {
+        questionCount++;
+        totalScore += parseFloat(data.score) || 0;
+        document.getElementById("statQ").textContent = questionCount;
+        document.getElementById("statScore").innerHTML =
+          (totalScore / questionCount).toFixed(1) + '<span>/10</span>';
+      }
+
       if (data.decision === "stop") {
         setStatus("Interview completed — generating final report...");
         await endInterview();
         return;
       }
 
-      // Update stats
-      questionCount++;
-      totalScore += parseFloat(data.score) || 0;
-      document.getElementById("statQ").textContent = questionCount;
-      document.getElementById("statScore").innerHTML =
-        (totalScore / questionCount).toFixed(1) + '<span>/10</span>';
-
-      setStatus(`Question ${questionCount} answered — keep going!`);
+      if (data.counted) {
+        setStatus(`Question ${questionCount} answered — keep going!`);
+      } else if (questionCount === 0) {
+        setStatus("Interview started — answer the question above");
+      } else {
+        setStatus("Couldn't score that answer — keep going!");
+      }
     }
   } catch (err) {
     removeTypingIndicator(typingId);

@@ -259,7 +259,9 @@ async def interview(request: InterviewRequest, user=Depends(get_current_user)):
 
     save_session(session)   # persist history/evaluation state so the interview survives restarts
     print(f"Session {request.session_id} history: {history}")
-    return parsed
+    # Tell the frontend whether this answer counts towards the score (same rule as answered_turns),
+    # on a copy so it isn't stored in history and doesn't end up in the LLM prompt.
+    return {**parsed, "counted": bool(asked_question) and parse_ok}
 
 
 # answered_turns pairs each answer with the question it actually responds to.

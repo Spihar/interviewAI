@@ -619,11 +619,12 @@ async def get_report(interview_id: str, user=Depends(get_current_user)):
 
 @app.post("/speech_to_text")
 async def speech_to_text(file: fastapi.UploadFile = fastapi.File(...), session_id: Optional[str] = None, user=Depends(get_current_user)):
-    # When the frontend passes its interview, audio is only transcribed if that interview has consent.
-    if session_id:
-        session = load_session(session_id, user)   # also does the ownership check
-        if not session or not session["consent_given"]:
-            raise HTTPException(status_code=403, detail="Please accept the privacy note before recording")
+    # Audio is only transcribed for one of the user's interviews that has consent.
+    if not session_id:
+        raise HTTPException(status_code=400, detail="Missing session_id")
+    session = load_session(session_id, user)   # also does the ownership check
+    if not session or not session["consent_given"]:
+        raise HTTPException(status_code=403, detail="Please accept the privacy note before recording")
     # A unique name per upload so two people speaking at once don't overwrite each other's audio.
     data = await file.read()
     if len(data) > MAX_UPLOAD_BYTES:

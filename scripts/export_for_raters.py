@@ -39,9 +39,9 @@ def redact(text):
     return PHONE.sub(lambda m: "[phone]" if sum(c.isdigit() for c in m.group()) >= 10 else m.group(), text)
 
 
-# safe_cell stops spreadsheet apps from treating a cell that starts with = + - @ as a formula.
+# safe_cell stops spreadsheet apps from treating a cell that starts with = + - @ (or a tab / carriage return) as a formula.
 def safe_cell(text):
-    return "'" + text if text[:1] in ("=", "+", "-", "@") else text
+    return "'" + text if text[:1] in ("=", "+", "-", "@", "\t", "\r") else text
 
 
 def fetch_all(table, columns):

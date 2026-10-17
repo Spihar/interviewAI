@@ -150,6 +150,9 @@ async def upload_resume(session_id: str, file: fastapi.UploadFile = fastapi.File
     data = await file.read()
     if len(data) > MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=413, detail="Resume file is too large (max 10 MB)")
+    # Only PDFs can be read; every PDF starts with %PDF (allowed within the first 1 KB by the spec).
+    if b"%PDF" not in data[:1024]:
+        raise HTTPException(status_code=400, detail="Please upload your resume as a PDF file")
     # A random name so the client's filename can't pick the path or collide with another upload.
     os.makedirs("temp", exist_ok=True)
     file_location = f"temp/{uuid.uuid4().hex}.pdf"
@@ -269,7 +272,14 @@ def interview(request: InterviewRequest, user=Depends(get_current_user)):
     if session["completed"]:
         return {"error": "Interview already ended"}
     # Only the opening call (no question asked yet) may have an empty answer; it saves no chat_history row.
+    # A repeated opening call (a retry after a lost response) gets the stored intro question again, without a new LLM call.
     if session["history"] and not request.user.strip():
+        if len(session["history"])==1:
+            opening=session["history"][0]
+            state=session["evaluation_state"]
+            return {**opening["ai"], "decision": "continue", "reason": "", "counted": False,
+                    "skill_state": state, "target_skill": opening.get("target_skill") or "communication",
+                    "settled": {skill: is_settled(entry) for skill, entry in state.items()}}
         raise HTTPException(status_code=400, detail="Please type or say an answer first")
 
     

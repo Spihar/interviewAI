@@ -8,7 +8,7 @@ LLM_MODEL = "gemini-2.5-flash"   # also saved with each chat_history row by serv
 # rubric: the rubric text (bands + criteria) the answer is scored against
 # assessed_skill: the skill the latest answer is scored on (None on the first interaction)
 # target_skill: the skill the next question should assess
-# focus_topic: optional topic the user chose to practise from the dashboard (None for a normal interview)
+# focus_topic: optional topic the user chose to practice from the dashboard (None for a normal interview)
 # The server keeps the per-skill evidence and decides when to stop, so the LLM only scores and asks.
 def llmcalling(context,user,history,rubric,assessed_skill,target_skill,focus_topic=None):
     # focus_topic comes from the page URL, so the prompt marks it as a topic name only, never as instructions.

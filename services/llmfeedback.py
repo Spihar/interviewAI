@@ -17,8 +17,8 @@ def llmfeedback(history, skills):
         - be as honest as possible
         - weak_topics: up to 3 specific topics the candidate struggled with (low scores, missing details),
           each with the skill it belongs to and one sentence on what was missing
-        - suggested_topics: up to 3 topics to practise next, each with the skill, a short title
-          and one sentence on what to practise
+        - suggested_topics: up to 3 topics to practice next, each with the skill, a short title
+          and one sentence on what to practice
         - skill must be one of: {", ".join(skills)}
 
         respond strictly in JSON format:

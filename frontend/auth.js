@@ -16,7 +16,7 @@ const COPY = {
   },
   signup: {
     heading: "Create your account",
-    sub: "Track your interview scores and get topics to practise.",
+    sub: "Track your interview scores and get topics to practice.",
     submit: "Create account",
     switchText: "Already have an account?",
     switchBtn: "Sign in",

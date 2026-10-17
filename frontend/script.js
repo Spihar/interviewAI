@@ -92,7 +92,7 @@ async function acceptConsent() {
 }
 
 function setInterviewControls(enabled) {
-  ["sendBtn", "uploadBtn", "recordBtn"].forEach((id) => { document.getElementById(id).disabled = !enabled; });
+  ["sendBtn", "recordBtn"].forEach((id) => { document.getElementById(id).disabled = !enabled; });
 }
 
 async function startSession() {
@@ -117,8 +117,10 @@ async function startSession() {
     document.getElementById("sessionBadge").classList.add("active");
     document.getElementById("consentCard").remove();
     document.getElementById("emptyState").hidden = false;
-    setInterviewControls(true);
-    setStatus("Session active — upload your resume or start answering");
+    // Only the resume upload (or starting without one) is possible until the first question arrives.
+    document.getElementById("uploadBtn").disabled = false;
+    document.getElementById("skipResumeBtn").disabled = false;
+    setStatus("Session active — upload your resume, or start without one");
   } catch (err) {
     document.getElementById("consentBtn").disabled = false;   // let them try again
     document.getElementById("sessionIdLabel").textContent = "Connection failed";
@@ -167,14 +169,50 @@ async function uploadResume() {
     btn.textContent = "✓ Uploaded";
     btn.style.borderColor = "var(--success)";
     btn.style.color = "var(--success)";
-    setStatus("Resume uploaded — start answering questions below");
-    addAIMessage("Great! I've read your resume. Let's begin. Tell me a bit about yourself and your background.");
+    await openInterview();
   } catch (err) {
     btn.textContent = "Upload Failed";
     btn.style.borderColor = "var(--danger)";
     btn.style.color = "var(--danger)";
     btn.disabled = false;
     setStatus("Resume upload failed: " + err.message);
+    console.error(err);
+  }
+}
+
+// ── Opening question ─────────────────────────────────────────────────────────────
+// The opening /interview call has no answer yet (user is ""), so the server saves no chat_history row
+// and returns the AI's intro question. The candidate's reply to it is then the first scored turn.
+let interviewOpened = false;
+async function openInterview() {
+  if (interviewOpened) return;
+  interviewOpened = true;
+  document.getElementById("uploadBtn").disabled = true;
+  document.getElementById("skipResumeBtn").disabled = true;
+  const typingId = addTypingIndicator();
+  setStatus("Preparing your first question…");
+  try {
+    const res = await fetch(`${API_BASE}/interview`, {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ session_id, user: "" }),
+    });
+    const data = await res.json();
+    removeTypingIndicator(typingId);
+    if (!res.ok || data.error) throw new Error(data.error || data.detail || "please try again");
+    addAIMessage(data.question);
+    if (data.skill_state) renderCoverage(data.skill_state, data.target_skill, data.settled);
+    setInterviewControls(true);
+    document.getElementById("skipResumeBtn").hidden = true;
+    setStatus("Interview started — answer the question above");
+  } catch (err) {
+    removeTypingIndicator(typingId);
+    interviewOpened = false;   // let them try again
+    const retry = document.getElementById("skipResumeBtn");
+    retry.textContent = "Try again";   // any uploaded resume is already saved, so this keeps it
+    retry.disabled = false;
+    addAIMessage("Couldn't get the first question: " + err.message, false);
+    setStatus("Couldn't start — press Try again");
     console.error(err);
   }
 }

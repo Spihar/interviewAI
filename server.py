@@ -268,6 +268,9 @@ def interview(request: InterviewRequest, user=Depends(get_current_user)):
         return {"error": "Invalid session ID"}
     if session["completed"]:
         return {"error": "Interview already ended"}
+    # Only the opening call (no question asked yet) may have an empty answer; it saves no chat_history row.
+    if session["history"] and not request.user.strip():
+        raise HTTPException(status_code=400, detail="Please type or say an answer first")
 
     
     # We retrieve the context and history for the given session ID, 

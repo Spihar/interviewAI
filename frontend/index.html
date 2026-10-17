@@ -68,7 +68,7 @@
           <!-- Empty state, shown once the interview has started -->
           <div class="empty-state" id="emptyState" hidden>
             <h3>Ready when you are</h3>
-            <p>Upload your resume on the right, then type your first answer or use the mic to speak. The interview ends on its own once every skill has been assessed, or when you end it.</p>
+            <p>Upload your resume on the right and the first question appears. Answer by typing or with the mic. The interview ends on its own once every skill has been assessed, or when you end it.</p>
           </div>
         </div>
 
@@ -111,7 +111,8 @@
             <p id="resumeZoneText">Click to choose your resume<br/><small>PDF</small></p>
             <input type="file" id="resumeFile" accept=".pdf,.doc,.docx" onchange="handleFileSelect()" />
           </div>
-          <button class="btn upload-btn" id="uploadBtn" onclick="uploadResume()" type="button">Upload resume</button>
+          <button class="btn upload-btn" id="uploadBtn" onclick="uploadResume()" type="button" disabled>Upload resume</button>
+          <button class="btn sm upload-btn" id="skipResumeBtn" onclick="openInterview()" type="button" disabled>Start without a resume</button>
         </div>
 
         <div class="panel">

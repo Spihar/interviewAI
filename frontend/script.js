@@ -9,7 +9,9 @@
 
 const SILENCE_MS = 2500;      // silence after speech that sends the answer
 const MIN_SPEECH_MS = 300;    // voiced time needed before silence can send (so a cough or click doesn't)
-const INTERIM_MS = 5000;      // how often the live transcript is refreshed while answering
+const INTERIM_MS = 12000;     // how often the live transcript is refreshed while answering
+const INTERIM_MAX_MS = 60000; // no live refreshes after this much recording (each one re-sends the whole answer)
+const MAX_ANSWER_MS = 180000; // an answer is sent after 3 minutes of recording, so constant background noise can't record forever
 const REVIEW_MS = 2000;       // time to press Edit before a transcribed answer is sent
 const MIN_QUESTIONS = 5, MAX_QUESTIONS = 12;   // MIN_QUESTIONS / MAX_QUESTIONS in services/rubric.py
 const SKILL_COUNT = 4;
@@ -30,8 +32,10 @@ let mode = readPref("answerMode", "voice") === "type" ? "type" : "voice";
 let micStream = null, audioCtx = null, analyser = null, levelBuf = null;
 let recorder = null, chunks = [];
 let answerGen = 0;            // bumps for each answer, so late interim transcripts are ignored
-let heardMs = 0, lastVoiceAt = 0, listenStartedAt = 0, lastFrameAt = 0, noiseFloor = null;
-let rafId = 0, interimTimer = 0, interimBusy = false, reviewTimer = 0;
+let heardMs = 0, recordedMs = 0, lastVoiceAt = 0, listenStartedAt = 0, lastFrameAt = 0, noiseFloor = null;
+let rafId = 0, interimTimer = 0, interimBusy = false, interimOff = false, reviewTimer = 0;
+let startingListen = false;   // startListening is in progress (guards double clicks)
+let ending = false;           // End was confirmed: nothing may reopen the mic or ask another question
 
 function readPref(key, fallback) {
   try { return localStorage.getItem(key) ?? fallback; } catch (e) { return fallback; }
@@ -113,6 +117,7 @@ function handleFileSelect() {
 }
 
 async function uploadResume() {
+  primeAudio();
   const file = $("resumeFile").files[0];
   if (!file) { shakeElement("resumeZone"); $("resumeMsg").textContent = "Choose a PDF first, or start without a resume."; return; }
   const btn = $("uploadBtn");
@@ -142,6 +147,7 @@ async function uploadResume() {
 async function openInterview() {
   if (interviewOpened) return;
   interviewOpened = true;
+  primeAudio();
   $("uploadBtn").disabled = true; $("skipResumeBtn").disabled = true;
   // Ask for the mic now, while the click still counts as the user's action, so the prompt appears before the first question.
   if (mode === "voice" && !(await ensureMic())) mode = "type";
@@ -173,9 +179,27 @@ function askQuestion(text) {
 }
 
 function afterQuestion() {
-  if (phase === "done") return;
-  if (mode === "voice") startListening();
+  if (phase === "done" || ending) return;
+  if (mode === "voice") whenSilent(startListening);
   else setPhase("typing", "Type your answer below");
+}
+
+// The mic must not hear the question: wait until the browser has finished speaking (the safety timer in speak()
+// can fire early), plus a short gap. Gives up waiting after 30 s and cuts the speech off.
+function whenSilent(fn) {
+  const started = performance.now();
+  const check = () => {
+    if (ending || phase === "done") return;
+    const talking = "speechSynthesis" in window && window.speechSynthesis.speaking;
+    if (talking && performance.now() - started < 30000) { setTimeout(check, 150); return; }
+    if (talking) stopSpeaking();
+    setTimeout(fn, 300);
+  };
+  check();
+}
+
+function ttsSpeaking() {
+  return "speechSynthesis" in window && window.speechSynthesis.speaking;
 }
 
 // ── Read-aloud (browser text-to-speech) ───────────────────────────────────────
@@ -233,9 +257,11 @@ if ("speechSynthesis" in window) window.speechSynthesis.onvoiceschanged = () => 
 // One mic stream for the whole interview, so the browser asks only once.
 async function ensureMic() {
   if (micStream && micStream.getAudioTracks().some((t) => t.readyState === "live")) return true;
+  let stream = null;
   try {
-    micStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
-    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+    primeAudio();
+    micStream = stream;
     analyser = audioCtx.createAnalyser();
     analyser.fftSize = 1024;
     levelBuf = new Float32Array(analyser.fftSize);
@@ -243,29 +269,53 @@ async function ensureMic() {
     return true;
   } catch (err) {
     console.error(err);
+    if (stream) stream.getTracks().forEach((t) => t.stop());   // don't leave the mic on if the audio setup failed
+    micStream = null;
     return false;
   }
+}
+
+// Creates (or resumes) the AudioContext. Called from clicks, because Safari only starts audio inside one.
+function primeAudio() {
+  try {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === "suspended") audioCtx.resume().catch(() => {});
+  } catch (e) { /* no Web Audio: silence detection won't work, Done still does */ }
 }
 
 function releaseMic() {
   if (micStream) micStream.getTracks().forEach((t) => t.stop());
   micStream = null;
   if (audioCtx) audioCtx.close().catch(() => {});
-  audioCtx = null;
+  audioCtx = null; analyser = null;
 }
 
 async function startListening() {
-  if (!(await ensureMic())) {
-    setMode("type", "Your microphone is blocked, so type your answer. Allow the mic in your browser to answer by voice.");
+  if (startingListen || ending || mode !== "voice" || phase === "listening" || phase === "paused" || phase === "done") return;
+  startingListen = true;
+  try {
+    if (!(await ensureMic())) {
+      setMode("type", "Your microphone is blocked, so type your answer. Allow the mic in your browser to answer by voice.", false);
+      return;
+    }
+    if (ending || mode !== "voice") return;
+    if (audioCtx.state === "suspended") await audioCtx.resume().catch(() => {});
+    if (recorder && recorder.state !== "inactive") recorder.stop();   // never two recorders at once
+    answerGen++;
+    const myChunks = [];          // each recorder writes to its own array
+    chunks = myChunks;
+    recorder = new MediaRecorder(micStream);
+    recorder.ondataavailable = (e) => { if (e.data && e.data.size) myChunks.push(e.data); };
+    recorder.start(1000);   // a chunk every second, so the live transcript can use what's recorded so far
+  } catch (err) {
+    console.error(err);
+    recorder = null;
+    setMode("type", "Recording isn't supported in this browser, so type your answer.", false);
     return;
+  } finally {
+    startingListen = false;
   }
-  if (audioCtx.state === "suspended") await audioCtx.resume().catch(() => {});
-  answerGen++;
-  chunks = [];
-  recorder = new MediaRecorder(micStream);
-  recorder.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
-  recorder.start(1000);   // a chunk every second, so the live transcript can use what's recorded so far
-  heardMs = 0; lastVoiceAt = 0; noiseFloor = null;
+  heardMs = 0; recordedMs = 0; lastVoiceAt = 0; noiseFloor = null;
   listenStartedAt = lastFrameAt = performance.now();
   $("liveTranscript").textContent = "";
   $("liveTranscript").classList.remove("final");
@@ -279,7 +329,8 @@ async function startListening() {
 // Reads the mic level each frame: drives the orb, and sends the answer after SILENCE_MS of silence.
 function levelLoop(now) {
   if (phase !== "listening" && phase !== "paused") { setLevel(0); return; }
-  const dt = now - lastFrameAt; lastFrameAt = now;
+  const dt = Math.min(100, now - lastFrameAt); lastFrameAt = now;   // capped, so a frozen frame can't count as long silence or speech
+  if (!analyser) return;
   analyser.getFloatTimeDomainData(levelBuf);
   let sum = 0;
   for (let i = 0; i < levelBuf.length; i++) sum += levelBuf[i] * levelBuf[i];
@@ -288,7 +339,11 @@ function levelLoop(now) {
 
   // Background level: drops straight to any quieter moment and creeps up slowly, so speech doesn't raise it.
   noiseFloor = noiseFloor === null || rms < noiseFloor ? rms : noiseFloor + (rms - noiseFloor) * 0.002;
-  if (phase === "listening" && now - listenStartedAt > 300) {
+  if (phase === "listening") recordedMs += dt;
+  if (phase === "listening" && recordedMs >= MAX_ANSWER_MS) { finishAnswer(); return; }
+  if (phase === "listening" && ttsSpeaking()) {
+    lastVoiceAt = now;   // the interviewer's voice is not the answer
+  } else if (phase === "listening" && now - listenStartedAt > 300) {
     const threshold = Math.min(0.06, Math.max(0.012, noiseFloor * 2.5));
     if (rms > threshold) { heardMs += dt; lastVoiceAt = now; }
     if (heardMs >= MIN_SPEECH_MS) {
@@ -299,6 +354,11 @@ function levelLoop(now) {
   }
   rafId = requestAnimationFrame(levelLoop);
 }
+
+// Animation frames stop in a hidden tab; on return, restart the silence timer instead of sending at once.
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) { lastVoiceAt = lastFrameAt = performance.now(); }
+});
 
 function setLevel(v) {
   $("orbWrap").style.setProperty("--level", v.toFixed(3));
@@ -343,19 +403,23 @@ async function transcribe(blob) {
     method: "POST", headers: authHeaders(), body: formData,
   });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.detail || "Transcription failed");
+  if (!res.ok) { const err = new Error(data.detail || "Transcription failed"); err.status = res.status; throw err; }
   return data;
 }
 
 // Shows what has been heard so far, faintly, so a misheard word can be caught. Failures are ignored.
 async function refreshLiveTranscript() {
-  if (interimBusy || phase !== "listening" || heardMs < MIN_SPEECH_MS || !chunks.length) return;
+  if (interimBusy || interimOff || phase !== "listening" || heardMs < MIN_SPEECH_MS || !chunks.length) return;
+  if (recordedMs > INTERIM_MAX_MS) return;
   interimBusy = true;
   const gen = answerGen;
   try {
     const data = await transcribe(new Blob(chunks, { type: recorder ? recorder.mimeType || "audio/webm" : "audio/webm" }));
     if (gen === answerGen && (phase === "listening" || phase === "paused")) $("liveTranscript").textContent = data.text;
-  } catch (e) { /* the final transcript is what counts */ }
+  } catch (e) {
+    // The final transcript is what counts. If Groq is rate limiting, stop live refreshes for the rest of the interview.
+    if (e.status === 429) interimOff = true;
+  }
   interimBusy = false;
 }
 
@@ -370,7 +434,8 @@ async function finishAnswer() {
   const blob = await stopRecorder();
   recorder = null;
   try {
-    const data = blob && blob.size ? await transcribe(blob) : { text: "" };
+    // Nothing was heard: don't send silence, which Whisper often turns into "Thank you."
+    const data = blob && blob.size && heardMs >= MIN_SPEECH_MS ? await transcribe(blob) : { text: "" };
     if (gen !== answerGen || phase !== "transcribing") return;   // ended or switched to typing meanwhile
     const text = (data.text || "").trim();
     if (!text) { setPhase("error", "I didn't catch anything. Try again, a little closer to the mic.", startListening); return; }
@@ -395,7 +460,7 @@ function sendReviewed() {
 function editTranscript() {
   clearTimeout(reviewTimer);
   const text = pendingTranscript;   // kept, so sending it unchanged still counts as "voice"
-  setMode("type", "Fix any words, then send");
+  setMode("type", "Fix any words, then send", false);
   $("history").value = text;
   onInputChange($("history"));
 }
@@ -411,10 +476,13 @@ function sendTyped() {
   submitAnswer(text, inputMode);
 }
 
-function setMode(next, message) {
+// save is false when the page switches by itself (blocked mic, a failed send), so the choice isn't remembered.
+function setMode(next, message, save = true) {
   clearTimeout(reviewTimer);
+  if (ending || phase === "done") return;
   mode = next;
-  savePref("answerMode", next);
+  if (save) savePref("answerMode", next);
+  if (next === "voice") primeAudio();
   applyMode();
   if (next === "type") {
     if (phase === "listening" || phase === "paused" || phase === "transcribing" || phase === "review" || phase === "error") {
@@ -446,7 +514,7 @@ async function submitAnswer(text, inputMode) {
     const data = await postJson("/interview", {
       session_id, user: text, stt_ms: inputMode === "typed" ? null : pendingSttMs, input_mode: inputMode,
     });
-    if (phase === "done") return;
+    if (phase === "done" || ending) return;
     pendingSttMs = null; pendingTranscript = null;
     if (data.counted) questionCount++;
     if (data.settled) settledCount = Object.values(data.settled).filter(Boolean).length;
@@ -454,10 +522,10 @@ async function submitAnswer(text, inputMode) {
     updateProgress();
     askQuestion(data.question);
   } catch (err) {
-    if (phase === "done") return;
+    if (phase === "done" || ending) return;
     // The answer wasn't saved: put it back for resending, keeping its voice details.
     removeLastLog();
-    setMode("type", "Your answer wasn't sent (" + err.message + "). Press send to try again.");
+    setMode("type", "Your answer wasn't sent (" + err.message + "). Press send to try again.", false);
     $("history").value = text;
     onInputChange($("history"));
   }
@@ -515,14 +583,22 @@ function removeLastLog() {
 
 // ── End interview ─────────────────────────────────────────────────────────────
 async function endInterview(auto = false) {
-  if (phase === "done") return;
+  if (phase === "done" || (ending && !auto)) return;
   if (!auto) {
+    if (phase === "thinking" || phase === "transcribing") {
+      $("stageNote").textContent = "Your answer is being sent. End the interview once the next question appears.";
+      return;
+    }
     if (questionCount === 0) { $("stageNote").textContent = "Answer at least one question before ending."; shakeElement("endBtn"); return; }
-    if (!confirm("End the interview now and see your report?")) return;
+    const ok = confirm("End the interview now and see your report?");
+    lastVoiceAt = lastFrameAt = performance.now();   // the dialog froze the silence timer; don't count that time
+    if (!ok) return;
   }
+  ending = true;
   clearTimeout(reviewTimer);
   stopSpeaking();
   stopListening();
+  releaseMic();   // no more answers, so the mic goes off now, even if the report fails
   $("endBtn").hidden = true;
   setPhase("thinking", "Writing your report…");
   $("caption").textContent = "";
@@ -530,7 +606,6 @@ async function endInterview(auto = false) {
     // On success the server returns total_questions, average_score, llm_score, feedback, improvements,
     // skill_scores, weak_topics, suggested_topics and interview_id (see report_response in server.py).
     const data = await postJson("/end_interview", { session_id, user: "" });
-    releaseMic();
     phase = "done";
     showReport(data);
   } catch (err) {

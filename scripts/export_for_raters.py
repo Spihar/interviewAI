@@ -4,8 +4,8 @@
 # It reads Supabase with SUPABASE_KEY from .env (the secret key, which bypasses row-level security)
 # and writes three files to exports/ (git-ignored):
 #   raters_blind.csv   one row per scored answer for the human raters (item_id, assessed_skill, question, answer):
-#                      no LLM score, band or justification, no participant code or turn number; emails, phone numbers
-#                      and links redacted; rows shuffled with a fixed seed; empty rater_score/rater_band columns
+#                      no LLM score, band or justification, no participant code or turn number; emails, phone numbers,
+#                      links and ID numbers (register/roll numbers) redacted; rows shuffled with a fixed seed; empty rater_score/rater_band columns
 #   key_llm_scores.csv participant_code, turn and the LLM's scores for the same item_ids, kept away from raters
 #                      and joined back for analysis
 #   rubric.txt         the rubric the LLM scored against, to hand to the raters
@@ -29,14 +29,107 @@ PAGE = 1000   # Supabase returns at most 1000 rows per request
 LINK = re.compile(r"(https?://\S+|www\.\S+|(github|linkedin)\.com/\S+)", re.IGNORECASE)
 EMAIL = re.compile(r"[\w.+-]+@[\w-]+(\.[\w-]+)+")
 # a run of digits, spaces, brackets, dots or dashes; only redacted when it has 10+ digits,
-# so years ("2019-2023") and scores aren't mistaken for phone numbers
-PHONE = re.compile(r"\+?\d[\d\s().-]{6,}\d")
+# so years ("2019-2023") and scores aren't mistaken for phone numbers; digits inside a word (a roll number
+# like "RA2111003010123") are left to ID_MIXED below
+PHONE = re.compile(r"(?<![A-Za-z0-9])\+?\d[\d\s().-]{6,}\d")
+
+# ID numbers (college register / roll numbers, student IDs), replaced with [id]. Three patterns, applied in order:
+# 1. a cue phrase ("register number is", "roll no.", "reg no:", "student id", "USN") followed by a number or code,
+#    redacted at any length: only the value is replaced, the cue words are kept
+ID_CUE = re.compile(
+    r"(\b(?:(?:register|registration|reg|roll|enrol?ment|enrollment|admission|student|college|university)"
+    r"\s*(?:number|num|no|id)|usn|prn)\b\.?\s*(?:is\s*)?[:#-]?\s*)"
+    r"([A-Za-z0-9]*\d[A-Za-z0-9]*(?:[ -]\d+)*)",
+    re.IGNORECASE)
+# 2. 6+ digits, optionally in groups of 3+ digits split by a single space or hyphen ("4373 3047", "1234567"),
+#    not part of a decimal, version or percentage; runs made only of 4-digit years ("2019-2023") are kept
+ID_DIGITS = re.compile(r"(?<![\w.])\d{3,}(?:[ -]\d{3,})*(?![\w%]|\.\d|\s%)")
+YEAR = re.compile(r"(19|20)\d\d")
+# 3. letters and digits mixed in one token of 6+ characters ("21CS1234", "22BCE0456", "RA2111003010123"):
+#    4+ digits when it starts with a digit, 6+ digits when it starts with letters, so names like "RTX4090" are kept
+ID_MIXED = re.compile(r"\b(?=[A-Za-z0-9]*[A-Za-z])(?:\d(?=(?:[A-Za-z]*\d){3})|[A-Za-z]+(?=(?:[A-Za-z]*\d){6}))[A-Za-z0-9]{5,}\b")
+
+
+# only_years is true for runs like "2019-2023" or "2019 2020 2021", which are kept
+def only_years(run):
+    groups = [g for g in re.split(r"\D+", run) if g]
+    return all(YEAR.fullmatch(g) for g in groups)
+
+
+def redact_phone(match):
+    run = match.group()
+    return "[phone]" if sum(c.isdigit() for c in run) >= 10 and not only_years(run) else run
+
+
+def redact_id_digits(match):
+    run = match.group()
+    groups = re.split(r"[ -]", run)
+    if sum(len(g) for g in groups) < 6 or only_years(run):
+        return run
+    return "[id]"
 
 
 def redact(text):
     text = LINK.sub("[link]", text or "")
     text = EMAIL.sub("[email]", text)
-    return PHONE.sub(lambda m: "[phone]" if sum(c.isdigit() for c in m.group()) >= 10 else m.group(), text)
+    text = PHONE.sub(redact_phone, text)
+    text = ID_CUE.sub(lambda m: m.group(1) + "[id]", text)
+    text = ID_DIGITS.sub(redact_id_digits, text)
+    return ID_MIXED.sub("[id]", text)
+
+
+# selftest checks redact() on ID numbers that must be removed and ordinary numbers that must stay.
+# Run it with:  python scripts/export_for_raters.py --selftest
+REDACTED = [
+    "my register number is 4373304",
+    "my register number is 4373304.",
+    "4373 3047",
+    "43733047",
+    "1234567",
+    "roll no. 1234",
+    "reg no: 12345",
+    "Register Number: 21CS1234",
+    "21CS1234",
+    "RA2111003010123",
+    "22BCE0456",
+    "student id is 98765",
+    "my USN is 1MS21CS001",
+]
+KEPT = [
+    "100 strings",
+    "2019-2023",
+    "2019 2020 2021",
+    "3.5 years",
+    "top 10",
+    "O(n log n)",
+    "Python 3.11",
+    "8 GB",
+    "1080p",
+    "in 2023",
+    "version 1.2.3",
+    "v2.10.4",
+    "95%",
+    "99.95%",
+    "RTX4090",
+    "ResNet50",
+    "x86 and ES2015",
+]
+
+
+def selftest():
+    failures = []
+    for text in REDACTED:
+        out = redact(text)
+        if "[id]" not in out or any(c.isdigit() for c in out):
+            failures.append(f"not redacted: {text!r} -> {out!r}")
+    for text in KEPT:
+        out = redact(text)
+        if out != text:
+            failures.append(f"changed: {text!r} -> {out!r}")
+    for line in failures:
+        print("FAIL", line)
+    print(f"{len(REDACTED) + len(KEPT) - len(failures)}/{len(REDACTED) + len(KEPT)} redaction checks passed")
+    return not failures
 
 
 # safe_cell stops spreadsheet apps from treating a cell that starts with = + - @ (or a tab / carriage return) as a formula.
@@ -69,7 +162,11 @@ def main():
     parser.add_argument("--seed", type=int, default=2026, help="shuffle seed, keep it fixed for a reproducible order")
     parser.add_argument("--exclude", action="append", default=[], metavar="P-XXXXXXXX",
                         help="participant_code to leave out, e.g. your own test interviews (repeatable)")
+    parser.add_argument("--selftest", action="store_true", help="only check the redaction patterns, export nothing")
     args = parser.parse_args()
+
+    if args.selftest:
+        sys.exit(0 if selftest() else 1)
 
     if not os.getenv("PARTICIPANT_SALT"):
         sys.exit("PARTICIPANT_SALT is not set in .env, so participant codes can't be made. Set it (and never change it) first.")

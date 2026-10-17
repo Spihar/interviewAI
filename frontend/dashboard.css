@@ -87,6 +87,7 @@ tbody tr[data-href]:hover, tbody tr[data-href]:focus-visible { background: var(-
 .cmp .bars { display: flex; flex-direction: column; gap: 3px; }
 .cmp .bars span { height: 7px; border-radius: 4px; display: block; }
 .cmp .val { text-align: right; }
+.cmp-count { display: block; font-size: 11.5px; color: var(--muted); }
 
 /* Question accordion */
 details { border-top: 1px solid var(--line-soft); padding: 12px 0; }

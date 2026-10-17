@@ -52,13 +52,17 @@ function render(r) {
   if (r.llm_score !== null && r.llm_score !== undefined) chips.push(`<span class="chip neutral num">Interviewer's overall score ${fmtScore(r.llm_score)}/10</span>`);
   document.getElementById("summaryChips").innerHTML = chips.join("");
 
-  // Per-skill comparison with the previous interview
+  // Per-skill comparison with the previous interview, plus how many answers assessed each skill
+  // (the coverage tracker that used to sit beside the interview; 2 answers settle a skill, see services/rubric.py).
   if (!r.previous) document.getElementById("prevLegend").hidden = true;
+  const answersBySkill = {};
+  r.answers.forEach((a) => { if (a.score !== null) answersBySkill[a.skill] = (answersBySkill[a.skill] || 0) + 1; });
   document.getElementById("cmp").innerHTML = SKILLS.map((s) => {
     const now = r.skills[s], prev = r.previous ? r.previous.skills[s] : null;
     const d = now !== null && prev !== null ? now - prev : null;
+    const n = answersBySkill[s] || 0;
     return `<div class="cmp">
-      <span>${skillLabel(s)}</span>
+      <span>${skillLabel(s)}<small class="cmp-count">${n} ${n === 1 ? "answer" : "answers"}</small></span>
       <div class="bars">
         <span style="width:${(now || 0) * 10}%;background:var(--accent)"></span>
         ${r.previous ? `<span style="width:${(prev || 0) * 10}%;background:var(--line)"></span>` : ""}

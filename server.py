@@ -182,15 +182,12 @@ class StartRequest(BaseModel):
     focus_topic: Optional[str] = None
     consent: bool = False
 
-# check_consent_columns turns a missing consent or participant_code column into a clear 500,
+# check_consent_columns turns a missing consent_given/consent_at column into a clear 500,
 # logging the database error here instead of sending it to the client.
 def check_consent_columns(error):
     if "consent_" in str(error):
         print(f"error saving consent, consent columns missing: {error}")
         raise HTTPException(status_code=500, detail="Database not migrated: run migrations/005_consent_timing.sql")
-    if "participant_code" in str(error):
-        print(f"error saving participant_code, column missing: {error}")
-        raise HTTPException(status_code=500, detail="Database not migrated: run migrations/008_research_data.sql")
 
 # The /start_interview endpoint is responsible for initiating a new interview session.
 # When a client makes a POST request to this endpoint, we create a new row in the interviews table
@@ -220,20 +217,23 @@ def start_interview(request: Optional[StartRequest] = None, user=Depends(get_cur
     focus_topic=(request.focus_topic or "").strip()[:120] if request else ""
     if focus_topic:
         row["focus_topic"]=focus_topic       # needs migrations/004_dashboard.sql
-    try:
-        response=supabase.table("interviews").insert(row).execute()
-    except Exception as e:
-        check_consent_columns(e)
-        if "focus_topic" not in row:
-            return {"error": f"Failed to create interview session in the database: {e}"}
-        # most likely migrations/004_dashboard.sql hasn't been run yet, so start a normal interview instead
-        print(f"error saving focus topic, starting without it: {e}")
-        row.pop("focus_topic")
+    # Optional columns whose migration may not have been run yet are dropped one at a time, so the interview still starts.
+    while True:
         try:
             response=supabase.table("interviews").insert(row).execute()
+            break
         except Exception as e:
             check_consent_columns(e)
-            return {"error": f"Failed to create interview session in the database: {e}"}
+            if "participant_code" in row and "participant_code" in str(e):
+                # migrations/008_research_data.sql hasn't been run yet; the export recomputes the code from user_id anyway
+                print(f"warning: participant_code column missing, starting without it (run migrations/008_research_data.sql): {e}")
+                row.pop("participant_code")
+            elif "focus_topic" in row:
+                # most likely migrations/004_dashboard.sql hasn't been run yet, so start a normal interview instead
+                print(f"error saving focus topic, starting without it: {e}")
+                row.pop("focus_topic")
+            else:
+                return {"error": f"Failed to create interview session in the database: {e}"}
     
     if not response.data or len(response.data) == 0:
         return {"error": "Failed to create interview session in the database: No data returned"}

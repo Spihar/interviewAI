@@ -3,9 +3,11 @@
 # Run from the project folder:  python scripts/export_for_raters.py
 # It reads Supabase with SUPABASE_KEY from .env (the secret key, which bypasses row-level security)
 # and writes three files to exports/ (git-ignored):
-#   raters_blind.csv   one row per scored answer for the human raters: no LLM score, band or justification,
-#                      no names or emails, rows shuffled with a fixed seed, empty rater_score/rater_band columns
-#   key_llm_scores.csv the LLM's scores for the same item_ids, kept away from raters and joined back for analysis
+#   raters_blind.csv   one row per scored answer for the human raters (item_id, assessed_skill, question, answer):
+#                      no LLM score, band or justification, no participant code or turn number; emails, phone numbers
+#                      and links redacted; rows shuffled with a fixed seed; empty rater_score/rater_band columns
+#   key_llm_scores.csv participant_code, turn and the LLM's scores for the same item_ids, kept away from raters
+#                      and joined back for analysis
 #   rubric.txt         the rubric the LLM scored against, to hand to the raters
 # Only interviews with consent_given, and answers the LLM scored (parse_ok), are exported.
 # Resume text is left out: it holds names and contact details that a regex can't reliably remove.
@@ -23,6 +25,8 @@ from services.rubric import rubric_text, RUBRIC_VERSION # noqa: E402
 
 PAGE = 1000   # Supabase returns at most 1000 rows per request
 
+# links first, so a profile URL is replaced as a whole and not split into email or phone pieces
+LINK = re.compile(r"(https?://\S+|www\.\S+|(github|linkedin)\.com/\S+)", re.IGNORECASE)
 EMAIL = re.compile(r"[\w.+-]+@[\w-]+(\.[\w-]+)+")
 # a run of digits, spaces, brackets, dots or dashes; only redacted when it has 10+ digits,
 # so years ("2019-2023") and scores aren't mistaken for phone numbers
@@ -30,14 +34,21 @@ PHONE = re.compile(r"\+?\d[\d\s().-]{6,}\d")
 
 
 def redact(text):
-    text = EMAIL.sub("[email]", text or "")
+    text = LINK.sub("[link]", text or "")
+    text = EMAIL.sub("[email]", text)
     return PHONE.sub(lambda m: "[phone]" if sum(c.isdigit() for c in m.group()) >= 10 else m.group(), text)
+
+
+# safe_cell stops spreadsheet apps from treating a cell that starts with = + - @ as a formula.
+def safe_cell(text):
+    return "'" + text if text[:1] in ("=", "+", "-", "@") else text
 
 
 def fetch_all(table, columns):
     rows, start = [], 0
     while True:
-        page = supabase.table(table).select(columns).range(start, start + PAGE - 1).execute().data or []
+        # ordered by id so pages don't overlap or skip rows
+        page = supabase.table(table).select(columns).order("id").range(start, start + PAGE - 1).execute().data or []
         rows.extend(page)
         if len(page) < PAGE:
             return rows
@@ -77,6 +88,8 @@ def main():
         if key in seen:
             continue                                    # a turn saved twice (retried request): keep the first
         seen.add(key)
+        # The code is recomputed from user_id with PARTICIPANT_SALT (the same function the server uses) instead of
+        # read from interviews.participant_code, so interviews from before migration 008 get the same code too.
         code = participant_code(interview["user_id"])
         if code in args.exclude:
             continue
@@ -90,11 +103,9 @@ def main():
         item_id = f"item_{n:04d}"
         blind.append({
             "item_id": item_id,
-            "participant_code": code,
-            "turn": row.get("turn_index"),
             "assessed_skill": row.get("assessed_skill"),
-            "question": redact(row.get("question")),
-            "answer": redact(row.get("answer")),
+            "question": safe_cell(redact(row.get("question"))),
+            "answer": safe_cell(redact(row.get("answer"))),
             "rater_score": "",
             "rater_band": "",
         })
@@ -119,7 +130,7 @@ def main():
 
     os.makedirs(args.out, exist_ok=True)
     write_csv(os.path.join(args.out, "raters_blind.csv"), list(blind[0].keys()) if blind else
-              ["item_id", "participant_code", "turn", "assessed_skill", "question", "answer", "rater_score", "rater_band"], blind)
+              ["item_id", "assessed_skill", "question", "answer", "rater_score", "rater_band"], blind)
     write_csv(os.path.join(args.out, "key_llm_scores.csv"), list(key_rows[0].keys()) if key_rows else ["item_id"], key_rows)
     with open(os.path.join(args.out, "rubric.txt"), "w", encoding="utf-8") as f:
         f.write(f"Rubric {RUBRIC_VERSION}. Give each answer a rater_score from 0 to 10 for its assessed_skill, "

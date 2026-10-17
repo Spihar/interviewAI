@@ -242,8 +242,6 @@ async function askAI() {
       headers: authHeaders({ "Content-Type": "application/json" }), // Attach auth header with JWT
       body: JSON.stringify({ session_id, user, stt_ms: pendingSttMs, input_mode: inputMode }),
     });
-    pendingSttMs = null;   // a typed follow-up answer has no transcription time
-    pendingTranscript = null;
     const data = await res.json();
     removeTypingIndicator(typingId);
 
@@ -254,6 +252,10 @@ async function askAI() {
       document.getElementById("charCount").textContent = user.length;
       setStatus("Error occurred");
     } else {
+      // The answer is saved, so a typed follow-up answer has no transcription time.
+      // (On an error the answer is put back for resending and keeps its voice details.)
+      pendingSttMs = null;
+      pendingTranscript = null;
       // Add AI question bubble
       addAIMessage(data.question);
       // Add feedback card

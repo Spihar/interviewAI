@@ -70,10 +70,11 @@ select tablename from pg_tables where schemaname='public' and not rowsecurity;
 python scripts/export_for_raters.py
 
 This writes three files to exports/ (git-ignored, never commit them):
-- raters_blind.csv: one row per scored answer (item_id, participant_code, turn, assessed_skill, question, answer)
-  with empty rater_score and rater_band columns. No LLM scores, no names; emails and phone numbers in the text are redacted,
+- raters_blind.csv: one row per scored answer (item_id, assessed_skill, question, answer)
+  with empty rater_score and rater_band columns. No LLM scores, participant codes or turn numbers; emails, phone numbers
+  and links in the text are redacted,
   and the rows are shuffled with a fixed seed (--seed, default 2026).
-- key_llm_scores.csv: the LLM's score, band, justification, model and timing for each item_id, to join back after rating.
+- key_llm_scores.csv: the participant_code, turn and the LLM's score, band, justification, model and timing for each item_id, to join back after rating.
 - rubric.txt: the rubric to give the raters.
 
 Only interviews with consent and answers the LLM scored are exported. Leave out your own test interviews with

@@ -35,18 +35,22 @@ PHONE = re.compile(r"(?<![A-Za-z0-9])\+?\d[\d\s().-]{6,}\d")
 
 # ID numbers (college register / roll numbers, student IDs), replaced with [id]. Three patterns, applied in order:
 # 1. a cue phrase ("register number is", "roll no.", "reg no:", "student id", "USN") followed by a number or code,
-#    redacted at any length: only the value is replaced, the cue words are kept
+#    redacted at any length, including "-" and "/" separators ("21-CS-1234", "2021/CS/123"):
+#    only the value is replaced, the cue words are kept
 ID_CUE = re.compile(
     r"(\b(?:(?:register|registration|reg|roll|enrol?ment|enrollment|admission|student|college|university)"
     r"\s*(?:number|num|no|id)|usn|prn)\b\.?\s*(?:is\s*)?[:#-]?\s*)"
-    r"([A-Za-z0-9]*\d[A-Za-z0-9]*(?:[ -]\d+)*)",
+    r"([A-Za-z0-9]*\d[A-Za-z0-9]*(?:[-/][A-Za-z0-9]+| \d+)*)",
     re.IGNORECASE)
-# 2. 6+ digits, optionally in groups of 3+ digits split by a single space or hyphen ("4373 3047", "1234567"),
-#    not part of a decimal, version or percentage; runs made only of 4-digit years ("2019-2023") are kept
+# 2. 7+ digits in total, optionally in groups of 3+ digits split by a single space or hyphen ("4373 3047", "4373304"),
+#    not part of a decimal, version, percentage or number+unit ("1200ms"); runs made only of 4-digit years
+#    ("2019-2023") and round numbers ending in 000 ("250000") are kept
 ID_DIGITS = re.compile(r"(?<![\w.])\d{3,}(?:[ -]\d{3,})*(?![\w%]|\.\d|\s%)")
 YEAR = re.compile(r"(19|20)\d\d")
+UNIT = re.compile(r"\d+[A-Za-z]{1,3}")
 # 3. letters and digits mixed in one token of 6+ characters ("21CS1234", "22BCE0456", "RA2111003010123"):
-#    4+ digits when it starts with a digit, 6+ digits when it starts with letters, so names like "RTX4090" are kept
+#    4+ digits when it starts with a digit, 6+ digits when it starts with letters, so names like "RTX4090" are kept;
+#    a number followed by a short unit ("12700K", "1200ms", "1080p") is kept too
 ID_MIXED = re.compile(r"\b(?=[A-Za-z0-9]*[A-Za-z])(?:\d(?=(?:[A-Za-z]*\d){3})|[A-Za-z]+(?=(?:[A-Za-z]*\d){6}))[A-Za-z0-9]{5,}\b")
 
 
@@ -63,10 +67,14 @@ def redact_phone(match):
 
 def redact_id_digits(match):
     run = match.group()
-    groups = re.split(r"[ -]", run)
-    if sum(len(g) for g in groups) < 6 or only_years(run):
+    digits = re.sub(r"\D", "", run)
+    if len(digits) < 7 or digits.endswith("000") or only_years(run):
         return run
     return "[id]"
+
+
+def redact_id_mixed(match):
+    return match.group() if UNIT.fullmatch(match.group()) else "[id]"
 
 
 def redact(text):
@@ -75,7 +83,7 @@ def redact(text):
     text = PHONE.sub(redact_phone, text)
     text = ID_CUE.sub(lambda m: m.group(1) + "[id]", text)
     text = ID_DIGITS.sub(redact_id_digits, text)
-    return ID_MIXED.sub("[id]", text)
+    return ID_MIXED.sub(redact_id_mixed, text)
 
 
 # selftest checks redact() on ID numbers that must be removed and ordinary numbers that must stay.
@@ -93,6 +101,9 @@ REDACTED = [
     "RA2111003010123",
     "22BCE0456",
     "student id is 98765",
+    "4373304",
+    "roll no 21-CS-1234",
+    "reg no: 2021/CS/123",
     "my USN is 1MS21CS001",
 ]
 KEPT = [
@@ -113,6 +124,11 @@ KEPT = [
     "RTX4090",
     "ResNet50",
     "x86 and ES2015",
+    "We served 100000 users",
+    "Rs 250000",
+    "rank among 120000 students",
+    "1200ms",
+    "12700K",
 ]
 
 

@@ -7,6 +7,7 @@ let isRecording = false;
 let questionCount = 0;
 let totalScore = 0;
 let pendingSttMs = null;   // how long the last transcription took, sent with the next answer
+let pendingTranscript = null;   // the transcription itself, to tell "voice" from "voice_edited" answers
 // Read AI questions aloud; defaults to on, and localStorage can throw in private windows.
 let voiceOn = true;
 try { voiceOn = localStorage.getItem("voiceOn") !== "false"; } catch (e) { voiceOn = true; }
@@ -183,6 +184,8 @@ async function askAI() {
   const ta = document.getElementById("history");
   const user = ta.value.trim();
   if (!user) { shakeElement("history"); return; }
+  // Saved with the turn for the research data: was this answer spoken, and was the transcript edited?
+  const inputMode = pendingTranscript === null ? "typed" : user === pendingTranscript.trim() ? "voice" : "voice_edited";
 
   // Show user bubble
   addUserMessage(user);
@@ -199,9 +202,10 @@ async function askAI() {
     const res = await fetch(`${API_BASE}/interview`, {
       method: "POST",
       headers: authHeaders({ "Content-Type": "application/json" }), // Attach auth header with JWT
-      body: JSON.stringify({ session_id, user, stt_ms: pendingSttMs }),
+      body: JSON.stringify({ session_id, user, stt_ms: pendingSttMs, input_mode: inputMode }),
     });
     pendingSttMs = null;   // a typed follow-up answer has no transcription time
+    pendingTranscript = null;
     const data = await res.json();
     removeTypingIndicator(typingId);
 
@@ -336,12 +340,14 @@ function stopRecording() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail || "Transcription failed");
       pendingSttMs = Number.isFinite(data.stt_ms) ? data.stt_ms : null;
+      pendingTranscript = data.text;
       document.getElementById("history").value = data.text;
       document.getElementById("charCount").textContent = data.text.length;
       setStatus("Transcription done — review and send");
     } catch (err) {
       document.getElementById("history").value = "";
       pendingSttMs = null;
+      pendingTranscript = null;
       setStatus("Transcription failed");
       console.error(err);
     }

@@ -5,6 +5,7 @@ from services.pdfreading import extract_text_pymupdf
 from services.llmfeedback import llmfeedback
 from services.rubric import RUBRIC_VERSION, SKILLS, rubric_text, empty_state, normalize_state, add_score, pick_target_skill, should_stop, is_settled, band_for
 from services.stt import sst
+from services.participant import participant_code
 from pydantic import BaseModel # For defining data models for request and response bodies in FastAPI.
 import os
 from fastapi.middleware.cors import CORSMiddleware
@@ -181,12 +182,15 @@ class StartRequest(BaseModel):
     focus_topic: Optional[str] = None
     consent: bool = False
 
-# check_consent_columns turns a missing consent_given/consent_at column into a clear 500,
+# check_consent_columns turns a missing consent or participant_code column into a clear 500,
 # logging the database error here instead of sending it to the client.
 def check_consent_columns(error):
     if "consent_" in str(error):
         print(f"error saving consent, consent columns missing: {error}")
         raise HTTPException(status_code=500, detail="Database not migrated: run migrations/005_consent_timing.sql")
+    if "participant_code" in str(error):
+        print(f"error saving participant_code, column missing: {error}")
+        raise HTTPException(status_code=500, detail="Database not migrated: run migrations/008_research_data.sql")
 
 # The /start_interview endpoint is responsible for initiating a new interview session.
 # When a client makes a POST request to this endpoint, we create a new row in the interviews table
@@ -208,6 +212,11 @@ def start_interview(request: Optional[StartRequest] = None, user=Depends(get_cur
         "consent_given": True,               # needs migrations/005_consent_timing.sql
         "consent_at": datetime.now(timezone.utc).isoformat()
     }
+    code=participant_code(user_id)            # anonymised id for the research data, needs migrations/008_research_data.sql
+    if code:
+        row["participant_code"]=code
+    else:
+        print("PARTICIPANT_SALT is not set in .env, so this interview has no participant_code")
     focus_topic=(request.focus_topic or "").strip()[:120] if request else ""
     if focus_topic:
         row["focus_topic"]=focus_topic       # needs migrations/004_dashboard.sql
@@ -242,10 +251,14 @@ def start_interview(request: Optional[StartRequest] = None, user=Depends(get_cur
 # This model includes two fields: session_id (a string representing the session ID) 
 # and user (a string representing the user's input).
 # stt_ms is optional: how long /speech_to_text took when the answer was spoken, saved with the turn.
+# input_mode is optional: "typed", "voice" (transcript sent unchanged) or "voice_edited".
 class InterviewRequest(BaseModel):
     session_id:str
     user:str
     stt_ms: Optional[int] = None
+    input_mode: Optional[str] = None
+
+INPUT_MODES = {"typed", "voice", "voice_edited"}
 
 @app.post("/interview")
 def interview(request: InterviewRequest, user=Depends(get_current_user)):
@@ -340,6 +353,7 @@ def interview(request: InterviewRequest, user=Depends(get_current_user)):
             "latency_ms": latency_ms,
             # None for typed answers; clamped so a bad client value can't store nonsense
             "stt_ms": max(0, min(request.stt_ms, 600000)) if request.stt_ms is not None else None,
+            "input_mode": request.input_mode if request.input_mode in INPUT_MODES else None,
             "parse_ok": parse_ok,
             "raw_response": res,
             "model": LLM_MODEL
@@ -348,13 +362,15 @@ def interview(request: InterviewRequest, user=Depends(get_current_user)):
             supabase.table("chat_history").insert(turn_row).execute()
         except Exception as e:
             print(f"error saving chat history to database: {e}")
-            # the stt_ms column is missing (migrations/005_consent_timing.sql not run), so keep the turn without it
-            if "stt_ms" in str(e):
-                turn_row.pop("stt_ms")
+            # a newer column is missing (migrations 005 or 008 not run), so keep the turn without it
+            missing=[column for column in ("stt_ms", "input_mode") if column in str(e)]
+            if missing:
+                for column in missing:
+                    turn_row.pop(column)
                 try:
                     supabase.table("chat_history").insert(turn_row).execute()
                 except Exception as e:
-                    print(f"error saving chat history without stt_ms: {e}")
+                    print(f"error saving chat history without {missing}: {e}")
 
     # Tell the frontend whether to stop, whether this answer counts towards the score (same rule as answered_turns),
     # and the per-skill evidence for the coverage panel,

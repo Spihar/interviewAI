@@ -1,6 +1,8 @@
 // Shared helpers for the dashboard and report pages:
 // Supabase session, authenticated API calls, nav user info and formatting.
-const API_BASE = "http://127.0.0.1:8000";
+// When the backend serves these pages (Docker, or uvicorn on its own), API calls go to the same address, so API_BASE is "".
+// When the pages are served separately with `python -m http.server 5500`, they call the backend on port 8000.
+const API_BASE = location.port === "5500" ? "http://127.0.0.1:8000" : "";
 const SUPABASE_URL  = "https://hincwkkvpdhaoyciailp.supabase.co";
 const SUPABASE_ANON = "sb_publishable_RyzMJZWK_hBE9qHpubmsIg_1LJNyHPp";
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON);

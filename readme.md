@@ -93,6 +93,49 @@ change the directory to frontend
 cd frontend
 python -m http.server 5500
 
+**Run with Docker (one container serves the API and the pages)**
+
+Install Docker Desktop, then from this folder:
+
+docker build -t interviewai .
+docker run --rm -p 8000:8000 -v "${PWD}/.env:/app/.env:ro" interviewai
+
+(That is PowerShell; in Command Prompt use %cd% instead of ${PWD}.)
+In Git Bash, which rewrites paths that start with /, use:
+MSYS_NO_PATHCONV=1 docker run --rm -p 8000:8000 -v "$(pwd -W)/.env:/app/.env:ro" interviewai
+If port 8000 is already in use (for example by uvicorn), stop that first or use -p 8001:8000 and open localhost:8001.
+Open http://localhost:8000. The server also serves frontend/, so you don't need the port 5500 server.
+.env is mounted read-only when the container starts and is never copied into the image (see .dockerignore).
+Don't use --env-file .env: it keeps quotes around values, so KEY="abc" reaches the app as "abc" with the quotes,
+which breaks the API keys and changes the participant codes made from PARTICIPANT_SALT.
+In Docker, voice needs GROQ_API_KEY: faster-whisper isn't installed in the image.
+For Google sign-in, add http://localhost:8000/dashboard.html to the Redirect URLs in Supabase (Authentication → URL Configuration).
+Running uvicorn on its own also serves the pages at http://127.0.0.1:8000.
+The separate frontend server must use port 5500: on any other port, the pages send API calls to the wrong server (see API_BASE in frontend/common.js).
+
+**Run on a server with HTTPS (AWS Lightsail or any Linux server with Docker)**
+
+docker-compose.yml starts the app and Caddy, which serves it on https with a free certificate it renews by itself.
+Ports 80 and 443 must be open in the server's firewall. Copy .env to the server next to docker-compose.yml
+(for example scp -i key.pem .env ubuntu@<ip>:~/interviewai/) and let only the container's user (uid 10001) read it:
+
+sudo chown 10001:10001 .env && sudo chmod 400 .env     (edit it later with sudo nano .env)
+
+With chmod 600 owned by your own user, the app can't read it and keeps restarting behind a 502 error.
+Then create deploy.env with the server's address (git-ignored). Without a domain, use the static IP with dashes and .sslip.io:
+
+SITE_ADDRESS=13-232-10-5.sslip.io
+
+docker compose --env-file deploy.env up -d --build     (start, or rebuild after pulling new code)
+docker compose --env-file deploy.env logs -f caddy     (watch the certificate being fetched)
+
+Every docker compose command needs --env-file deploy.env. Without it, compose tries to read .env itself
+and stops with "open .env: permission denied", because .env belongs to uid 10001.
+
+Then add https://<SITE_ADDRESS> as the Site URL and https://<SITE_ADDRESS>/dashboard.html as a Redirect URL in Supabase,
+and https://<SITE_ADDRESS> as an authorized JavaScript origin in Google Cloud if it asks for one.
+Keep the same PARTICIPANT_SALT as on your laptop, or the same person gets a new participant code.
+
 **Voice**
 
 Speech-to-text uses Groq Whisper. Add GROQ_API_KEY=your_groq_api_key to .env (get a free key at console.groq.com).

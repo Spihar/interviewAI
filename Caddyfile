@@ -1,0 +1,22 @@
+# Caddy's settings. {$SITE_ADDRESS} comes from deploy.env (see docker-compose.yml).
+# Naming the address is all Caddy needs to fetch and renew an HTTPS certificate for it.
+{$SITE_ADDRESS} {
+	encode gzip
+
+	# Reject uploads over 11 MB here, before they use the server's memory.
+	# The app's own limit is 10 MB per file (MAX_UPLOAD_BYTES in server.py); the extra 1 MB covers the form around the file.
+	request_body {
+		max_size 11MB
+	}
+
+	header {
+		# Browsers remember to use https for this address for a year, even if someone types http://.
+		Strict-Transport-Security "max-age=31536000"
+		# Browsers must treat files as the type the server says, not guess (stops some script-injection tricks).
+		X-Content-Type-Options "nosniff"
+		# Other sites only learn the address, not the full page path, when a user follows a link out.
+		Referrer-Policy "strict-origin-when-cross-origin"
+	}
+
+	reverse_proxy app:8000
+}

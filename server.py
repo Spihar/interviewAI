@@ -10,6 +10,8 @@ from pydantic import BaseModel # For defining data models for request and respon
 import os
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import RedirectResponse
+from fastapi.staticfiles import StaticFiles
 import uuid
 import json
 import re
@@ -121,9 +123,16 @@ def save_session(session):
         raise HTTPException(status_code=503, detail="Could not save your answer, please send it again")
 
 
+# The backend also serves the frontend pages (see the StaticFiles mount at the end of this file),
+# so the site's home page sends people to sign in. auth.html forwards signed-in users to the dashboard.
 @app.get("/")
 async def read_root():
-    return {"Hello": "World"}
+    return RedirectResponse("/auth.html")
+
+# /health lets Docker (and later the AWS host) check that the server is up, without signing in.
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
 
 @app.post("/upload_resume")
 async def upload_resume(session_id: str, file: fastapi.UploadFile = fastapi.File(...), user=Depends(get_current_user)):
@@ -727,3 +736,11 @@ async def speech_to_text(file: fastapi.UploadFile = fastapi.File(...), session_i
         os.remove(file_location)  # Clean up the temporary file; audio is never kept
     # stt_ms is sent back with the next /interview call and saved on that turn's chat_history row
     return {"text": text, "stt_ms": int((time.perf_counter()-started)*1000)}
+
+
+# ── FRONTEND ──────────────────────────────────────────────────────────────────
+# Serve frontend/ (auth.html, dashboard.html, ...) from this same server, so the app has one address:
+# no CORS, one HTTPS certificate, and one URL to give Google sign-in.
+# This must stay the last route: a mount at "/" matches every path, so API routes registered after it would never be reached.
+FRONTEND_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "frontend")
+app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")

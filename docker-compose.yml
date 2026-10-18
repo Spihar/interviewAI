@@ -1,0 +1,59 @@
+# Runs InterviewAI on a server with HTTPS: two containers started together by `docker compose up -d`.
+#   app   = the existing Dockerfile (FastAPI serving the API and the frontend pages) on port 8000, reachable only by Caddy.
+#   caddy = the front door on ports 80 and 443. It gets a free HTTPS certificate from Let's Encrypt and renews it by itself,
+#           then passes every request on to app:8000. HTTPS is needed because browsers only allow the microphone on secure sites.
+# Before the first start:
+#   1. Put .env next to this file and let the container's user (uid 10001, see the Dockerfile) read it, and nobody else:
+#        sudo chown 10001:10001 .env && sudo chmod 400 .env      (edit it later with sudo nano .env)
+#   2. Create deploy.env next to this file with the server's address, for example:
+#        SITE_ADDRESS=13-232-10-5.sslip.io
+# Start with:  docker compose --env-file deploy.env up -d --build
+#   Every docker compose command needs --env-file deploy.env: by default compose reads ./.env itself,
+#   which fails with "permission denied" once .env belongs to uid 10001 (and it must not read the keys anyway).
+
+# Keep each container's logs to 3 files of 10 MB, so they can't fill the disk over months.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  app:
+    build: .
+    restart: unless-stopped            # start again after a crash or a server reboot
+    logging: *logging
+    volumes:
+      # Secrets are mounted read-only at start, never baked into the image (see Dockerfile).
+      # create_host_path: false makes `up` stop with a clear error if .env is missing,
+      # instead of Docker creating an empty .env folder and the app starting without its keys.
+      - type: bind
+        source: ./.env
+        target: /app/.env
+        read_only: true
+        bind:
+          create_host_path: false
+    expose:
+      - "8000"                         # open to Caddy inside Docker's private network only, not to the internet
+
+  caddy:
+    image: caddy:2.10.2                # pinned so a rebuild gets the same Caddy
+    restart: unless-stopped
+    logging: *logging
+    depends_on:
+      app:
+        condition: service_healthy     # wait until the Dockerfile's /health check passes, so the first visitors don't get a 502
+    env_file:
+      - deploy.env                     # gives Caddy SITE_ADDRESS, read by the Caddyfile
+    ports:
+      - "80:80"                        # plain http: Let's Encrypt checks it, and Caddy redirects visitors to https
+      - "443:443"                      # https
+      - "443:443/udp"                  # HTTP/3, a faster version of https that some browsers use
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data               # the certificate lives here, so restarts don't request a new one each time
+      - caddy_config:/config
+
+volumes:
+  caddy_data:
+  caddy_config:

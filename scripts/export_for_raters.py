@@ -77,34 +77,81 @@ def redact_id_mixed(match):
     return match.group() if UNIT.fullmatch(match.group()) else "[id]"
 
 
-# name_tokens turns a person's name (and email local part) into the words to redact: each word of 3+ letters.
-# Shorter words ("Li", "K") are skipped, so they don't wipe out ordinary words.
-def name_tokens(*names):
-    tokens = set()
-    for name in names:
-        for word in re.findall(r"[^\W\d_]+", name or ""):
-            if len(word) >= 3:
-                tokens.add(word.lower())
-    return tokens
+# Name words that are also everyday or tech words. They are only redacted when written like a name ("Ram"),
+# never in lower case ("ram") or all capitals ("RAM"), so "8 GB RAM" or "data science" stay.
+COMMON_WORDS = {
+    "ram", "dev", "sai", "raj", "data", "rose", "hope", "joy", "grace", "faith", "will", "mark", "bill", "may",
+    "june", "april", "summer", "sunny", "lucky", "king", "rich", "max", "ray", "sage", "chase", "hunter", "cash",
+    "stone", "hill", "wood", "field", "gold", "silver", "pearl", "star", "moon", "sky", "rain", "sun", "love",
+    "honey", "prince", "raja", "rani", "java", "ruby", "swift", "rust", "python", "react", "node", "angular",
+    "flask", "spring", "git", "cloud", "linux", "page", "core", "net", "web", "app", "code", "key", "test",
+}
+# Words that make a resume's first line a heading or job title, not a name ("Computer Science Student").
+HEADING_WORDS = {
+    "student", "engineer", "engineering", "developer", "science", "computer", "resume", "curriculum", "vitae",
+    "profile", "summary", "objective", "contact", "software", "data", "analyst", "intern", "graduate", "fresher",
+    "full", "stack", "web", "frontend", "backend", "designer", "manager", "technology", "information", "btech",
+    "mtech", "bachelor", "master", "university", "college", "institute", "personal", "details", "education",
+}
+
+
+# name_words returns the 3+ letter words of a name, lower-cased. Shorter words ("Li", "K") are skipped
+# so they don't wipe out ordinary words.
+def name_words(name):
+    return {word.lower() for word in re.findall(r"[^\W\d_]+", name or "") if len(word) >= 3}
 
 
 # resume_name returns the first non-empty line of the resume if it looks like a name:
-# 2 to 4 capitalised words, no digits or @ (e.g. "Harthik Reddy" or "HARTHIK REDDY").
+# 2 to 4 capitalised words, no digits or @, no heading words (e.g. "Harthik Reddy" or "HARTHIK REDDY").
 def resume_name(resume_text):
     first = next((line.strip() for line in (resume_text or "").splitlines() if line.strip()), "")
     words = first.split()
-    if 2 <= len(words) <= 4 and not re.search(r"[\d@]", first) and all(re.fullmatch(r"[A-Z][A-Za-z'.-]*", w) for w in words):
+    if (2 <= len(words) <= 4 and not re.search(r"[\d@]", first)
+            and all(re.fullmatch(r"[A-Z][A-Za-z'.-]*", w) for w in words)
+            and not any(w.lower().strip(".'-") in HEADING_WORDS for w in words)):
         return first
     return ""
+
+
+# name_tokens builds the set of things to redact for one participant:
+# - the words of their sign-in profile name,
+# - their email local part as one whole token ("data.science.student", never split into pieces),
+# - the resume's first line, only when it looks like a name and shares a word with the profile name.
+def name_tokens(profile_names=(), email_local="", resume_text=""):
+    tokens = set()
+    for name in profile_names:
+        tokens |= name_words(name)
+    resume_words = name_words(resume_name(resume_text))
+    if resume_words & tokens:
+        tokens |= resume_words
+    if re.search(r"[A-Za-z]", email_local or "") and len(email_local) >= 3:
+        tokens.add(email_local.lower())
+    return tokens
+
+
+NAME_HITS = [0]   # total [name] replacements in this export, printed as a count (never the names)
+
+
+def redact_names(text, names):
+    if not names:
+        return text
+    plain = sorted((n for n in names if n not in COMMON_WORDS), key=len, reverse=True)
+    common = sorted((n.capitalize() for n in names if n in COMMON_WORDS), key=len, reverse=True)
+    if plain:
+        text, hits = re.subn(r"\b(?:" + "|".join(map(re.escape, plain)) + r")\b", "[name]", text, flags=re.IGNORECASE)
+        NAME_HITS[0] += hits
+    if common:
+        # case-sensitive: "Ram" only, not "ram" or "RAM"
+        text, hits = re.subn(r"\b(?:" + "|".join(map(re.escape, common)) + r")\b", "[name]", text)
+        NAME_HITS[0] += hits
+    return text
 
 
 def redact(text, names=()):
     # links and emails first, so an address containing the name is replaced as a whole
     text = LINK.sub("[link]", text or "")
     text = EMAIL.sub("[email]", text)
-    if names:
-        pattern = r"\b(?:" + "|".join(re.escape(n) for n in sorted(names, key=len, reverse=True)) + r")\b"
-        text = re.sub(pattern, "[name]", text, flags=re.IGNORECASE)
+    text = redact_names(text, names)
     text = PHONE.sub(redact_phone, text)
     text = ID_CUE.sub(lambda m: m.group(1) + "[id]", text)
     text = ID_DIGITS.sub(redact_id_digits, text)
@@ -158,20 +205,30 @@ KEPT = [
 
 
 # (text, the participant's name, expected output)
+# (text, the participant's name_tokens() arguments, expected output)
 NAME_CASES = [
-    ("my name is Harthik Reddy", "Harthik Reddy", "my name is [name] [name]"),
-    ("HARTHIK here, from Hyderabad", "Harthik Reddy", "[name] here, from Hyderabad"),
-    ("I used Reddy Labs data", "Priya Sharma", "I used Reddy Labs data"),
-    ("Hi Al, thanks", "Al Kumar", "Hi Al, thanks"),
-    ("reach me as harthikwork on github", "harthikwork", "reach me as [name] on github"),
-    ("mail asha.v@x.com", "Asha Verma", "mail [email]"),
+    ("my name is Harthik Reddy", {"profile_names": ["Harthik Reddy"]}, "my name is [name] [name]"),
+    ("HARTHIK here, from Hyderabad", {"profile_names": ["Harthik Reddy"]}, "[name] here, from Hyderabad"),
+    ("I used Reddy Labs data", {"profile_names": ["Priya Sharma"]}, "I used Reddy Labs data"),
+    ("Hi Al, thanks", {"profile_names": ["Al Kumar"]}, "Hi Al, thanks"),
+    ("reach me as harthikwork on github", {"email_local": "harthikwork"}, "reach me as [name] on github"),
+    ("mail asha.v@x.com", {"profile_names": ["Asha Verma"]}, "mail [email]"),
+    ("my laptop has 8 GB RAM", {"profile_names": ["Sai Ram"]}, "my laptop has 8 GB RAM"),
+    ("I am Ram", {"profile_names": ["Sai Ram"]}, "I am [name]"),
+    ("I like data science", {"email_local": "data.science.student"}, "I like data science"),
+    ("id data.science.student", {"email_local": "data.science.student"}, "id [name]"),
+    ("set up the dev environment", {"profile_names": ["Dev Patel"]}, "set up the dev environment"),
+    ("I study computer science", {"profile_names": ["Asha Verma"], "resume_text": "Computer Science Student\nSkills"},
+     "I study computer science"),
+    ("Verma here", {"profile_names": ["Asha V"], "resume_text": "ASHA VERMA\nB.Tech"}, "[name] here"),
+    ("Verma here", {"profile_names": ["Ravi Kumar"], "resume_text": "ASHA VERMA\nB.Tech"}, "Verma here"),
 ]
 
 
 def selftest():
     failures = []
-    for text, name, expected in NAME_CASES:
-        out = redact(text, name_tokens(name))
+    for text, args, expected in NAME_CASES:
+        out = redact(text, name_tokens(**args))
         if out != expected:
             failures.append(f"name case: {text!r} -> {out!r}, expected {expected!r}")
     for text in REDACTED:
@@ -208,20 +265,24 @@ def fetch_all(table, columns):
 # participant_names returns {interview_id: name tokens} from the sign-in profile (Google full_name/name, email
 # local part) and the resume's first line. Names are only used for redaction and never printed.
 def participant_names(interviews):
-    by_user, missing = {}, 0
+    profiles, missing = {}, 0
     for interview in interviews:
         user_id = interview.get("user_id")
-        if user_id not in by_user:
+        if user_id not in profiles:
             try:
                 user = supabase.auth.admin.get_user_by_id(user_id).user
                 meta = user.user_metadata or {}
-                by_user[user_id] = name_tokens(meta.get("full_name"), meta.get("name"), (user.email or "").split("@")[0])
+                profiles[user_id] = ([meta.get("full_name"), meta.get("name")], (user.email or "").split("@")[0])
             except Exception:
-                by_user[user_id] = set()
+                profiles[user_id] = ([], "")
                 missing += 1
+    if profiles and missing == len(profiles):
+        # most likely SUPABASE_KEY isn't the secret key; exporting now would leave every name in the file
+        sys.exit("Could not read any sign-in profile, so names can't be redacted. Check that SUPABASE_KEY is the secret key.")
     if missing:
-        print(f"warning: no sign-in profile for {missing} participant(s), only resume names are redacted for them")
-    return {i["id"]: by_user[i.get("user_id")] | name_tokens(resume_name(i.get("resume_text"))) for i in interviews}
+        print(f"warning: no sign-in profile for {missing} participant(s); their names may not be redacted, check those rows")
+    return {i["id"]: name_tokens(profiles[i.get("user_id")][0], profiles[i.get("user_id")][1], i.get("resume_text"))
+            for i in interviews}
 
 
 def write_csv(path, fieldnames, rows):
@@ -312,6 +373,7 @@ def main():
 
     participants = len({code for code, _ in items})
     print(f"Exported {len(items)} answers from {participants} participants to {args.out}/ (seed {args.seed}).")
+    print(f"Replaced {NAME_HITS[0]} participant name(s) with [name].")
     print("Give raters raters_blind.csv and rubric.txt only. Keep key_llm_scores.csv away from them.")
 
 

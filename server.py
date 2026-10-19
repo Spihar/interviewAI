@@ -318,7 +318,12 @@ def interview(request: InterviewRequest, user=Depends(get_current_user)):
 
     started=time.perf_counter()
     try:
-        res=llmcalling(context,user_answer,history,rubric_text(),assessed_skill,target_skill,session.get("focus_topic"))
+        if asked_question:
+            res=llmcalling(context,user_answer,history,rubric_text(),assessed_skill,target_skill,session.get("focus_topic"))
+        else:
+            # The opening turn has nothing to score and a fixed question (it asks candidates not to give their name),
+            # so it's served without an LLM call, in the same shape as an LLM reply.
+            res=json.dumps({"question": INTRO_QUESTION, "feedback": "", "score": 0, "band": "", "justification": ""})
     except Exception as e:
         print(f"LLM call failed for session {request.session_id}: {e}")
         raise HTTPException(status_code=502, detail="The AI interviewer didn't respond, please send your answer again")
@@ -342,9 +347,6 @@ def interview(request: InterviewRequest, user=Depends(get_current_user)):
         }
         target_skill=assessed_skill or "communication"
 
-    if not asked_question:
-        # every candidate gets the same opening question, which asks them not to give their name
-        parsed["question"]=INTRO_QUESTION
     if parse_ok and assessed_skill:
         add_score(evaluation_state, assessed_skill, parsed["score"])
     history.append({ "user": user_answer, "ai": parsed, "question": asked_question, "parse_ok": parse_ok,

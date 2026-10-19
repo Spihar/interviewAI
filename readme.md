@@ -65,6 +65,13 @@ After running 006_rls.sql, list any public tables still without row-level securi
 
 select tablename from pg_tables where schemaname='public' and not rowsecurity;
 
+**Study setup (keep fixed during data collection)**
+
+Rubric v1 (services/rubric.py), model gemini-2.5-flash, and the interview prompt in services/llmcalling.py.
+Prompt change on 2026-10-19, before the pilot: the AI never uses the candidate's name or personal details, and the
+opening question asks candidates to introduce their background without giving their name. Interviews from before this
+date used the earlier prompt.
+
 **Exporting answers for human raters**
 
 python scripts/export_for_raters.py
@@ -72,7 +79,8 @@ python scripts/export_for_raters.py
 This writes three files to exports/ (git-ignored, never commit them):
 - raters_blind.csv: one row per scored answer (item_id, assessed_skill, question, answer)
   with empty rater_score and rater_band columns. No LLM scores, participant codes or turn numbers; emails, phone numbers,
-  links and ID numbers (register/roll numbers, 6+ digit runs, codes like 21CS1234) in the text are redacted,
+  links, ID numbers (register/roll numbers, codes like 21CS1234) and each participant's own name
+  (from their sign-in profile and the first line of their resume) in the text are redacted,
   and the rows are shuffled with a fixed seed (--seed, default 2026).
 - key_llm_scores.csv: the participant_code, turn and the LLM's score, band, justification, model and timing for each item_id, to join back after rating.
 - rubric.txt: the rubric to give the raters.

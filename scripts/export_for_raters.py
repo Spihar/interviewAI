@@ -5,7 +5,7 @@
 # and writes three files to exports/ (git-ignored):
 #   raters_blind.csv   one row per scored answer for the human raters (item_id, assessed_skill, question, answer):
 #                      no LLM score, band or justification, no participant code or turn number; emails, phone numbers,
-#                      links and ID numbers (register/roll numbers) redacted; rows shuffled with a fixed seed; empty rater_score/rater_band columns
+#                      links, ID numbers (register/roll numbers) and the participant's own name redacted; rows shuffled with a fixed seed; empty rater_score/rater_band columns
 #   key_llm_scores.csv participant_code, turn and the LLM's scores for the same item_ids, kept away from raters
 #                      and joined back for analysis
 #   rubric.txt         the rubric the LLM scored against, to hand to the raters
@@ -77,9 +77,34 @@ def redact_id_mixed(match):
     return match.group() if UNIT.fullmatch(match.group()) else "[id]"
 
 
-def redact(text):
+# name_tokens turns a person's name (and email local part) into the words to redact: each word of 3+ letters.
+# Shorter words ("Li", "K") are skipped, so they don't wipe out ordinary words.
+def name_tokens(*names):
+    tokens = set()
+    for name in names:
+        for word in re.findall(r"[^\W\d_]+", name or ""):
+            if len(word) >= 3:
+                tokens.add(word.lower())
+    return tokens
+
+
+# resume_name returns the first non-empty line of the resume if it looks like a name:
+# 2 to 4 capitalised words, no digits or @ (e.g. "Harthik Reddy" or "HARTHIK REDDY").
+def resume_name(resume_text):
+    first = next((line.strip() for line in (resume_text or "").splitlines() if line.strip()), "")
+    words = first.split()
+    if 2 <= len(words) <= 4 and not re.search(r"[\d@]", first) and all(re.fullmatch(r"[A-Z][A-Za-z'.-]*", w) for w in words):
+        return first
+    return ""
+
+
+def redact(text, names=()):
+    # links and emails first, so an address containing the name is replaced as a whole
     text = LINK.sub("[link]", text or "")
     text = EMAIL.sub("[email]", text)
+    if names:
+        pattern = r"\b(?:" + "|".join(re.escape(n) for n in sorted(names, key=len, reverse=True)) + r")\b"
+        text = re.sub(pattern, "[name]", text, flags=re.IGNORECASE)
     text = PHONE.sub(redact_phone, text)
     text = ID_CUE.sub(lambda m: m.group(1) + "[id]", text)
     text = ID_DIGITS.sub(redact_id_digits, text)
@@ -132,8 +157,23 @@ KEPT = [
 ]
 
 
+# (text, the participant's name, expected output)
+NAME_CASES = [
+    ("my name is Harthik Reddy", "Harthik Reddy", "my name is [name] [name]"),
+    ("HARTHIK here, from Hyderabad", "Harthik Reddy", "[name] here, from Hyderabad"),
+    ("I used Reddy Labs data", "Priya Sharma", "I used Reddy Labs data"),
+    ("Hi Al, thanks", "Al Kumar", "Hi Al, thanks"),
+    ("reach me as harthikwork on github", "harthikwork", "reach me as [name] on github"),
+    ("mail asha.v@x.com", "Asha Verma", "mail [email]"),
+]
+
+
 def selftest():
     failures = []
+    for text, name, expected in NAME_CASES:
+        out = redact(text, name_tokens(name))
+        if out != expected:
+            failures.append(f"name case: {text!r} -> {out!r}, expected {expected!r}")
     for text in REDACTED:
         out = redact(text)
         if "[id]" not in out or any(c.isdigit() for c in out):
@@ -144,7 +184,8 @@ def selftest():
             failures.append(f"changed: {text!r} -> {out!r}")
     for line in failures:
         print("FAIL", line)
-    print(f"{len(REDACTED) + len(KEPT) - len(failures)}/{len(REDACTED) + len(KEPT)} redaction checks passed")
+    total = len(REDACTED) + len(KEPT) + len(NAME_CASES)
+    print(f"{total - len(failures)}/{total} redaction checks passed")
     return not failures
 
 
@@ -162,6 +203,25 @@ def fetch_all(table, columns):
         if len(page) < PAGE:
             return rows
         start += PAGE
+
+
+# participant_names returns {interview_id: name tokens} from the sign-in profile (Google full_name/name, email
+# local part) and the resume's first line. Names are only used for redaction and never printed.
+def participant_names(interviews):
+    by_user, missing = {}, 0
+    for interview in interviews:
+        user_id = interview.get("user_id")
+        if user_id not in by_user:
+            try:
+                user = supabase.auth.admin.get_user_by_id(user_id).user
+                meta = user.user_metadata or {}
+                by_user[user_id] = name_tokens(meta.get("full_name"), meta.get("name"), (user.email or "").split("@")[0])
+            except Exception:
+                by_user[user_id] = set()
+                missing += 1
+    if missing:
+        print(f"warning: no sign-in profile for {missing} participant(s), only resume names are redacted for them")
+    return {i["id"]: by_user[i.get("user_id")] | name_tokens(resume_name(i.get("resume_text"))) for i in interviews}
 
 
 def write_csv(path, fieldnames, rows):
@@ -187,7 +247,8 @@ def main():
     if not os.getenv("PARTICIPANT_SALT"):
         sys.exit("PARTICIPANT_SALT is not set in .env, so participant codes can't be made. Set it (and never change it) first.")
 
-    interviews = {row["id"]: row for row in fetch_all("interviews", "id, user_id, consent_given")}
+    interviews = {row["id"]: row for row in fetch_all("interviews", "id, user_id, consent_given, resume_text")}
+    names = participant_names(interviews.values())
     turns = fetch_all("chat_history", "*")
 
     items, seen = [], set()
@@ -217,8 +278,8 @@ def main():
         blind.append({
             "item_id": item_id,
             "assessed_skill": row.get("assessed_skill"),
-            "question": safe_cell(redact(row.get("question"))),
-            "answer": safe_cell(redact(row.get("answer"))),
+            "question": safe_cell(redact(row.get("question"), names.get(row["interview_id"], ()))),
+            "answer": safe_cell(redact(row.get("answer"), names.get(row["interview_id"], ()))),
             "rater_score": "",
             "rater_band": "",
         })

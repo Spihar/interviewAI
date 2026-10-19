@@ -1,6 +1,6 @@
 import fastapi
 from fastapi import Header, HTTPException, Depends
-from services.llmcalling import llmcalling, LLM_MODEL
+from services.llmcalling import llmcalling, LLM_MODEL, INTRO_QUESTION
 from services.pdfreading import extract_text_pymupdf
 from services.llmfeedback import llmfeedback
 from services.rubric import RUBRIC_VERSION, SKILLS, rubric_text, empty_state, normalize_state, add_score, pick_target_skill, should_stop, is_settled, band_for
@@ -336,12 +336,15 @@ def interview(request: InterviewRequest, user=Depends(get_current_user)):
         # question again (or the intro question), and the next turn assesses the same skill.
         parse_ok=False
         parsed = {
-            "question": asked_question or "Let's start. Please briefly introduce yourself and your background.",
+            "question": asked_question or INTRO_QUESTION,
             "feedback": "Sorry, I couldn't score that answer. Please answer the question again.",
             "score": 0
         }
         target_skill=assessed_skill or "communication"
 
+    if not asked_question:
+        # every candidate gets the same opening question, which asks them not to give their name
+        parsed["question"]=INTRO_QUESTION
     if parse_ok and assessed_skill:
         add_score(evaluation_state, assessed_skill, parsed["score"])
     history.append({ "user": user_answer, "ai": parsed, "question": asked_question, "parse_ok": parse_ok,

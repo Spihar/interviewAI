@@ -4,6 +4,8 @@ from dotenv import load_dotenv
 load_dotenv()
 
 LLM_MODEL = "gemini-2.5-flash"   # also saved with each chat_history row by server.py
+# The opening question. Candidates are asked not to give their name, so answers stay anonymous for the study.
+INTRO_QUESTION = "Without telling me your name, briefly introduce your background and what you're studying."
 
 # rubric: the rubric text (bands + criteria) the answer is scored against
 # assessed_skill: the skill the latest answer is scored on (None on the first interaction)
@@ -40,6 +42,8 @@ def llmcalling(context,user,history,rubric,assessed_skill,target_skill,focus_top
         - Ask exactly one next question, and it must assess the skill: {target_skill}
         - Base the question on the candidate's resume and earlier answers where possible.
         - avoid repeating topics that are already covered.
+        - Never address or mention the candidate by name, and never repeat personal details from the resume
+          (name, email, phone number, address, college or student ID) in the question, feedback or justification.
         {focus_rule}
 
         Candidate Resume:
@@ -52,7 +56,7 @@ def llmcalling(context,user,history,rubric,assessed_skill,target_skill,focus_top
         {user}
 
         If this is first interaction (conversation so far is empty):
-        - start with the basic introduction and ask the candidate to briefly introduce themselves and their background.
+        - the question must be exactly: "{INTRO_QUESTION}"
         - set score to 0, band to "", justification to ""
 
         respond strictly in JSON format:

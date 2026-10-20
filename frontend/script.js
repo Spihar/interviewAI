@@ -3,15 +3,20 @@
 //
 // Flow: consent (step 1) -> resume (step 2) -> voice-first interview -> report.
 // In voice mode the interviewer reads each question aloud, then the mic opens on its own. The answer is sent after
-// SILENCE_MS of silence (once the person has started talking), or when they press Done. Pause stops the silence timer.
+// a few seconds of silence (once the person has started talking), or when they press Done. Pause stops the silence timer.
+// Long answers get a longer pause allowance, so stopping to think mid-explanation doesn't send the answer.
 // "Type instead" switches to a text box. Per-answer scores and feedback are saved by the server but not shown
 // until the report, so they can't influence later answers.
 
-const SILENCE_MS = 2500;      // silence after speech that sends the answer
+const SILENCE_MS = 3500;      // silence after speech that sends a short answer
+const LONG_SILENCE_MS = 6000; // silence that sends an answer once LONG_ANSWER_MS of speech has been heard
+const LONG_ANSWER_MS = 30000; // speech after which an answer counts as long (explaining a project, say)
 const MIN_SPEECH_MS = 300;    // voiced time needed before silence can send (so a cough or click doesn't)
 const INTERIM_MS = 12000;     // how often the live transcript is refreshed while answering
 const INTERIM_MAX_MS = 60000; // no live refreshes after this much recording (each one re-sends the whole answer)
-const MAX_ANSWER_MS = 180000; // an answer is sent after 3 minutes of recording, so constant background noise can't record forever
+const MAX_ANSWER_MS = 480000; // an answer is sent after 8 minutes of recording, so constant background noise can't record forever
+const MAX_WARN_MS = 60000;    // warn this long before MAX_ANSWER_MS sends the answer
+const AUDIO_BPS = 64000;      // recording bitrate: plenty for speech, and keeps 8 minutes well under the server's 10 MB cap
 const REVIEW_MS = 2000;       // time to press Edit before a transcribed answer is sent
 const MIN_QUESTIONS = 5, MAX_QUESTIONS = 12;   // MIN_QUESTIONS / MAX_QUESTIONS in services/rubric.py
 const SKILL_COUNT = 4;
@@ -34,6 +39,7 @@ let recorder = null, chunks = [];
 let answerGen = 0;            // bumps for each answer, so late interim transcripts are ignored
 let heardMs = 0, recordedMs = 0, lastVoiceAt = 0, listenStartedAt = 0, lastFrameAt = 0, noiseFloor = null;
 let rafId = 0, interimTimer = 0, interimBusy = false, interimOff = false, reviewTimer = 0;
+let previewPaused = false;    // live transcript refreshes stopped for this answer (INTERIM_MAX_MS reached)
 let startingListen = false;   // startListening is in progress (guards double clicks)
 let ending = false;           // End was confirmed: nothing may reopen the mic or ask another question
 
@@ -304,7 +310,9 @@ async function startListening() {
     answerGen++;
     const myChunks = [];          // each recorder writes to its own array
     chunks = myChunks;
-    recorder = new MediaRecorder(micStream);
+    // Some browsers reject or ignore a bitrate, so fall back to their default.
+    try { recorder = new MediaRecorder(micStream, { audioBitsPerSecond: AUDIO_BPS }); }
+    catch (e) { recorder = new MediaRecorder(micStream); }
     recorder.ondataavailable = (e) => { if (e.data && e.data.size) myChunks.push(e.data); };
     recorder.start(1000);   // a chunk every second, so the live transcript can use what's recorded so far
   } catch (err) {
@@ -315,7 +323,7 @@ async function startListening() {
   } finally {
     startingListen = false;
   }
-  heardMs = 0; recordedMs = 0; lastVoiceAt = 0; noiseFloor = null;
+  heardMs = 0; recordedMs = 0; lastVoiceAt = 0; noiseFloor = null; previewPaused = false;
   listenStartedAt = lastFrameAt = performance.now();
   $("liveTranscript").textContent = "";
   $("liveTranscript").classList.remove("final");
@@ -326,7 +334,7 @@ async function startListening() {
   interimTimer = setInterval(refreshLiveTranscript, INTERIM_MS);
 }
 
-// Reads the mic level each frame: drives the orb, and sends the answer after SILENCE_MS of silence.
+// Reads the mic level each frame: drives the orb, and sends the answer after silenceLimit() of silence.
 function levelLoop(now) {
   if (phase !== "listening" && phase !== "paused") { setLevel(0); return; }
   const dt = Math.min(100, now - lastFrameAt); lastFrameAt = now;   // capped, so a frozen frame can't count as long silence or speech
@@ -348,11 +356,29 @@ function levelLoop(now) {
     if (rms > threshold) { heardMs += dt; lastVoiceAt = now; }
     if (heardMs >= MIN_SPEECH_MS) {
       const quiet = now - lastVoiceAt;
-      if (quiet >= SILENCE_MS) { finishAnswer(); return; }
-      $("stageState").textContent = quiet > 900 ? "Sending when you stay quiet… keep talking to continue" : "Listening…";
+      const limit = silenceLimit();
+      if (quiet >= limit) { finishAnswer(); return; }
+      $("stageState").textContent = listeningText(quiet, limit);
     }
   }
   rafId = requestAnimationFrame(levelLoop);
+}
+
+// Short answers send after a short pause; long ones allow longer pauses to think.
+function silenceLimit() {
+  return heardMs >= LONG_ANSWER_MS ? LONG_SILENCE_MS : SILENCE_MS;
+}
+
+// Status line while listening: a countdown once the person goes quiet, and a warning near the length limit.
+function listeningText(quiet, limit) {
+  const left = MAX_ANSWER_MS - recordedMs;
+  const sending = quiet > 1500 ? `sending in ${Math.ceil((limit - quiet) / 1000)} s` : "";
+  if (left <= MAX_WARN_MS) {
+    const warn = `About ${Math.ceil(left / 1000)} s left for this answer`;
+    return sending ? `${warn}… ${sending}` : `${warn}… wrap up, or press Done`;
+  }
+  if (sending) return `S${sending.slice(1)}… keep talking to continue, or press Pause`;
+  return "Listening…";
 }
 
 // Animation frames stop in a hidden tab; on return, restart the silence timer instead of sending at once.
@@ -410,7 +436,15 @@ async function transcribe(blob) {
 // Shows what has been heard so far, faintly, so a misheard word can be caught. Failures are ignored.
 async function refreshLiveTranscript() {
   if (interimBusy || interimOff || phase !== "listening" || heardMs < MIN_SPEECH_MS || !chunks.length) return;
-  if (recordedMs > INTERIM_MAX_MS) return;
+  if (recordedMs > INTERIM_MAX_MS) {
+    // Say so once, so a frozen preview doesn't look like the mic stopped hearing.
+    if (!previewPaused) {
+      previewPaused = true;
+      const el = $("liveTranscript");
+      el.textContent = (el.textContent ? el.textContent + " … " : "") + "(live preview paused, your full answer is still being recorded)";
+    }
+    return;
+  }
   interimBusy = true;
   const gen = answerGen;
   try {
@@ -423,7 +457,7 @@ async function refreshLiveTranscript() {
   interimBusy = false;
 }
 
-// Done, or SILENCE_MS of silence: transcribe the whole answer, show it briefly, then send.
+// Done, or a long enough silence: transcribe the whole answer, show it briefly, then send.
 async function finishAnswer() {
   if (phase !== "listening" && phase !== "paused") return;
   clearInterval(interimTimer);
@@ -433,9 +467,19 @@ async function finishAnswer() {
   const gen = ++answerGen;
   const blob = await stopRecorder();
   recorder = null;
+  if (gen !== answerGen || phase !== "transcribing") return;   // ended or switched to typing meanwhile
+  // Nothing was heard: don't send silence, which Whisper often turns into "Thank you."
+  if (!blob || !blob.size || heardMs < MIN_SPEECH_MS) { setPhase("error", "I didn't catch anything. Try again, a little closer to the mic.", startListening); return; }
+  transcribeAnswer(blob);
+}
+
+// Transcribes a recorded answer. If that fails, the recording is kept, so Try again resends the same audio
+// (a long answer shouldn't have to be spoken twice) and Record again starts over.
+async function transcribeAnswer(blob) {
+  setPhase("transcribing", "Transcribing your answer…");
+  const gen = ++answerGen;
   try {
-    // Nothing was heard: don't send silence, which Whisper often turns into "Thank you."
-    const data = blob && blob.size && heardMs >= MIN_SPEECH_MS ? await transcribe(blob) : { text: "" };
+    const data = await transcribe(blob);
     if (gen !== answerGen || phase !== "transcribing") return;   // ended or switched to typing meanwhile
     const text = (data.text || "").trim();
     if (!text) { setPhase("error", "I didn't catch anything. Try again, a little closer to the mic.", startListening); return; }
@@ -446,8 +490,9 @@ async function finishAnswer() {
     setPhase("review", "Sending your answer… press Edit if a word is wrong");
     reviewTimer = setTimeout(sendReviewed, REVIEW_MS);
   } catch (err) {
-    if (gen !== answerGen) return;
-    setPhase("error", "Couldn't transcribe that: " + err.message, startListening);
+    if (gen !== answerGen || phase !== "transcribing") return;
+    setPhase("error", `Couldn't transcribe that (${err.message.replace(/\.$/, "")}). Your recording is kept: press Try again to resend it.`, () => transcribeAnswer(blob));
+    $("recordAgainBtn").hidden = false;
   }
 }
 
@@ -552,6 +597,7 @@ function setPhase(next, text, retry) {
   $("retryActions").hidden = next !== "error";
   if (retry) $("retryBtn").onclick = () => retry();
   $("retryActions").querySelectorAll(".btn").forEach((b) => { b.hidden = false; });
+  $("recordAgainBtn").hidden = true;   // only shown when a failed transcription kept a recording
   $("pauseLabel").textContent = next === "paused" ? "Resume" : "Pause";
   $("sendBtn").disabled = next === "thinking" || next === "done";
 }
@@ -610,7 +656,7 @@ async function endInterview(auto = false) {
     showReport(data);
   } catch (err) {
     setPhase("error", "Couldn't create the report: " + err.message, () => endInterview(true));
-    $("retryActions").querySelector(".btn:not(.primary)").hidden = true;   // no "Type instead" here
+    $("retryActions").querySelectorAll(".btn:not(.primary)").forEach((b) => { b.hidden = true; });   // only Try again here
   }
 }
 

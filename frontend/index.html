@@ -76,7 +76,7 @@
         <div class="eyebrow">How it works</div>
         <ol>
           <li>The interviewer reads each question aloud, then your mic turns on.</li>
-          <li>Answer out loud. Stop talking for a few seconds, or press <b>Done</b>, and your answer is sent.</li>
+          <li>Answer out loud. Stop talking for a few seconds, or press <b>Done</b>, and your answer is sent. Long answers are fine: you can talk for up to 8 minutes.</li>
           <li>Press <b>Pause</b> if you need time to think, or <b>Type instead</b> if you'd rather type.</li>
           <li>Scores stay hidden until the end, then you get a full report.</li>
         </ol>
@@ -134,6 +134,7 @@
 
         <div class="stage-actions" id="retryActions" hidden>
           <button class="btn primary" id="retryBtn" type="button">Try again</button>
+          <button class="btn" id="recordAgainBtn" onclick="startListening()" type="button" hidden>Record again</button>
           <button class="btn" onclick="setMode('type')" type="button">Type instead</button>
         </div>
       </div>
@@ -170,6 +171,6 @@
 </div>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4"></script>
 <script src="common.js?v=9"></script>
-<script src="script.js?v=8"></script>
+<script src="script.js?v=10"></script>
 </body>
 </html>

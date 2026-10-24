@@ -8,7 +8,7 @@
   <link rel="stylesheet" href="theme.css?v=8" />
   <script src="theme.js?v=8"></script>
   <title>InterviewAI · Report</title>
-  <link rel="stylesheet" href="dashboard.css?v=8" />
+  <link rel="stylesheet" href="dashboard.css?v=9" />
 </head>
 <body>
 <div class="shell">
@@ -50,22 +50,25 @@
           </div>
         </div>
 
+        <!-- Left column stacks "Per skill" and "Areas to improve" so it roughly matches the height of "Focus next" on the right. -->
         <div class="grid g-2-1">
-          <div class="panel">
-            <div class="panel-h"><h2 class="panel-title">Per skill</h2>
-              <div class="legend static"><span><i style="background:var(--accent)"></i>This interview</span><span id="prevLegend"><i style="background:var(--line)"></i>Previous</span></div>
+          <div class="col">
+            <div class="panel">
+              <div class="panel-h"><h2 class="panel-title">Per skill</h2>
+                <div class="legend static"><span><i style="background:var(--accent)"></i>This interview</span><span id="prevLegend"><i style="background:var(--line)"></i>Previous</span></div>
+              </div>
+              <div id="cmp"></div>
             </div>
-            <div id="cmp"></div>
+            <div class="panel grow">
+              <div class="panel-h"><h2 class="panel-title">Areas to improve</h2></div>
+              <p class="prose" id="improvements"></p>
+            </div>
           </div>
           <div class="panel">
             <div class="panel-h"><h2 class="panel-title">Focus next</h2></div>
             <div class="list" id="focusNext"></div>
+            <button class="btn sm focus-more" id="focusMore" type="button" aria-controls="focusNext" hidden></button>
           </div>
-        </div>
-
-        <div class="panel">
-          <div class="panel-h"><h2 class="panel-title">Areas to improve</h2></div>
-          <p class="prose" id="improvements"></p>
         </div>
 
         <div class="panel">
@@ -78,6 +81,6 @@
 </div>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4"></script>
 <script src="common.js?v=9"></script>
-<script src="report.js?v=8"></script>
+<script src="report.js?v=9"></script>
 </body>
 </html>

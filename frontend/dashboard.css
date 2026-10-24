@@ -50,6 +50,11 @@
 .list-item p { margin: 0; color: var(--muted); font-size: 13px; grid-column: 1 / -1; }
 .list-item strong { font-weight: 600; min-width: 0; }
 .list .empty { padding: 12px 0; text-align: left; }
+.list-item[hidden] { display: none; }
+.focus-more { margin-top: 12px; }
+/* A grid cell holding several stacked panels; the .grow panel takes up any spare height. */
+.col { display: flex; flex-direction: column; gap: 20px; min-width: 0; }
+.col .grow { flex: 1; }
 
 /* Suggested practice cards */
 .sugg { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }

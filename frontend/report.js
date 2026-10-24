@@ -22,6 +22,25 @@ function showError(msg) {
   bar.hidden = false;
 }
 
+// How many "Focus next" items show before the "Show more" button.
+const FOCUS_VISIBLE = 3;
+
+// Wires the "Show more / Show less" button under "Focus next". It stays hidden when everything already fits.
+function setupFocusToggle(total) {
+  const btn = document.getElementById("focusMore");
+  const extra = total - FOCUS_VISIBLE;
+  if (extra <= 0) { btn.hidden = true; return; }
+  let open = false;
+  const label = () => { btn.textContent = open ? "Show less" : `Show ${extra} more`; btn.setAttribute("aria-expanded", String(open)); };
+  label();
+  btn.hidden = false;
+  btn.onclick = () => {
+    open = !open;
+    document.querySelectorAll("#focusNext .list-item").forEach((el, i) => { if (i >= FOCUS_VISIBLE) el.hidden = !open; });
+    label();
+  };
+}
+
 // The rubric skills come from the server (/reports returns skill_names), the list here is only a fallback.
 let SKILLS = ["communication", "technical_depth", "problem_solving", "project_experience"];
 
@@ -81,12 +100,15 @@ function render(r) {
     r.answers.map((a, i) => ({ ...a, i })).filter((a) => a.score !== null && a.score < 5).slice(0, 3)
       .forEach((a) => items.push({ name: a.question, chip: `Q${a.i + 1}`, cls: "bad", why: a.justification }));
   }
-  focus.innerHTML = items.length ? items.map((t) => `
-    <div class="list-item">
+  // Only the first few show at first, so this card stays about as tall as the "Per skill" card beside it.
+  // Weak topics come first, so the most important ones are always visible; the rest sit behind "Show more".
+  focus.innerHTML = items.length ? items.map((t, i) => `
+    <div class="list-item"${i >= FOCUS_VISIBLE ? " hidden" : ""}>
       <strong>${escHtml(t.name)}</strong>
       ${t.practice ? `<a class="btn sm" href="${practiceUrl(t.name)}">Practice</a>` : `<span class="chip ${t.cls}">${escHtml(t.chip)}</span>`}
       ${t.why ? `<p>${escHtml(t.why)}</p>` : ""}
     </div>`).join("") : `<div class="empty">Nothing stood out as weak in this interview.</div>`;
+  setupFocusToggle(items.length);
 
   const practiceTopic = r.weak_topics[0]?.topic || r.suggested_topics[0]?.title || (worst && skillLabel(worst));
   if (practiceTopic) {

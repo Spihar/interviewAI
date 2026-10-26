@@ -21,6 +21,8 @@ temp/
 
 # Not needed to run the server.
 .git
+.github/
+tests/
 .gitignore
 present/
 migrations/

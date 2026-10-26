@@ -1,0 +1,85 @@
+# CI ("continuous integration"): GitHub checks the code on every push and pull request, on its own computers.
+# A green tick on the commit means it passed; a red cross means something broke, and the log shows what.
+# This file only CHECKS the code. It never deploys and never touches the AWS server or the real database.
+# No secrets are needed: the tests use placeholder keys (see tests/test_smoke.py).
+
+name: CI
+
+on:
+  push:                     # every push, on any branch
+  pull_request:             # and every pull request
+  workflow_dispatch:        # plus a "Run workflow" button on the Actions tab
+
+# Read-only access to the repo is all these checks need.
+permissions:
+  contents: read
+
+# If you push twice quickly, stop the older run and only check the newest commit.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Job 1: does the Python code load, and do the tests pass?
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Get the code
+        uses: actions/checkout@v4
+
+      - name: Install Python 3.13.5 (same as the Dockerfile)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13.5"
+          cache: pip         # reuse downloaded packages between runs, so later runs are faster
+
+      - name: Install the app's packages, plus the test tools
+        run: pip install -r requirements.txt pytest==8.4.2 ruff==0.13.0
+
+      # Only the rules for real errors: syntax errors and names that don't exist (like a typo in a variable).
+      # Style rules are left out on purpose, so old code doesn't fail the check.
+      - name: Look for code errors (ruff)
+        run: ruff check --select E9,F63,F7,F82 --output-format github .
+
+      - name: Run the tests (pytest)
+        run: python -m pytest -v
+
+  # Job 2: does the Docker image still build, and does the container start and answer /health?
+  # This is the same image the AWS server runs, so a red cross here means a deploy would have failed.
+  docker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Get the code
+        uses: actions/checkout@v4
+
+      - name: Build the image
+        run: docker build -t interviewai-ci .
+
+      # The app reads its keys from a mounted .env (see the Dockerfile), so give it a fake one.
+      # The image runs as uid 10001, so that user must be able to read the file.
+      - name: Start the container with placeholder keys
+        run: |
+          printf '%s\n' \
+            'SUPABASE_URL=https://ci-placeholder.supabase.co' \
+            'SUPABASE_KEY=sb_secret_ci_placeholder' \
+            'GEMINI_API_KEY=ci-placeholder' \
+            'GROQ_API_KEY=ci-placeholder' \
+            'PARTICIPANT_SALT=ci-placeholder' > ci.env
+          chmod 644 ci.env
+          docker run -d --name app -p 8000:8000 -v "$PWD/ci.env:/app/.env:ro" interviewai-ci
+
+      - name: Wait for /health to answer
+        run: |
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8000/health; then echo; echo "Container is healthy."; exit 0; fi
+            sleep 2
+          done
+          echo "The container did not answer /health within 60 seconds. Its logs:"
+          docker logs app
+          exit 1
+
+      - name: Stop the container
+        if: always()
+        run: docker rm -f app || true

@@ -40,3 +40,9 @@ def test_api_needs_sign_in():
     # Without a token the server must refuse before reaching Supabase.
     response = client.get("/dashboard")
     assert response.status_code == 401
+
+def test_upload_resume_exists():
+    # The frontend (script.js) calls /upload_resume. If the route is renamed or deleted,
+    # the server answers 405 ("no such route for POST") instead of 401 ("sign in first").
+    response = client.post("/upload_resume?session_id=test")
+    assert response.status_code == 401

@@ -54,6 +54,8 @@ __pycache__/
 
 Run the files in migrations/ in the Supabase SQL editor, in number order, before starting the new server code.
 005_consent_timing.sql must be run before 006_rls.sql.
+009_grants.sql gives the backend and signed-in users access to the tables through the Supabase API.
+It changes nothing on an existing database, but is needed on a fresh one: since 30 Oct 2026 Supabase doesn't grant this automatically.
 
 Before running 006_rls.sql, check the type of interviews.user_id:
 

@@ -12,6 +12,12 @@ const SILENCE_MS = 3500;      // silence after speech that sends a short answer
 const LONG_SILENCE_MS = 6000; // silence that sends an answer once LONG_ANSWER_MS of speech has been heard
 const LONG_ANSWER_MS = 30000; // speech after which an answer counts as long (explaining a project, say)
 const MIN_SPEECH_MS = 300;    // voiced time needed before silence can send (so a cough or click doesn't)
+const MIN_VOICE_RMS = 0.005;  // quietest level that counts as speech (some Mac mics are much quieter than others)
+const SILENT_MIC_RMS = 0.001; // below this the whole time, the mic is sending no sound at all (muted or wrong input)
+const SILENT_HINT_MS = 4000;  // how long a silent mic is listened to before the status line says so
+const QUIET_HINT_MS = 10000;  // how long a mic that hears sound, but no speech, is listened to before a hint
+const VOICE_RUN_MS = 60;      // sound must stay above the speech level this long to count (a key tap or click is shorter)
+const MIN_DONE_MS = 1500;     // recording needed before Done sends an answer the level meter hardly heard
 const INTERIM_MS = 12000;     // how often the live transcript is refreshed while answering
 const INTERIM_MAX_MS = 60000; // no live refreshes after this much recording (each one re-sends the whole answer)
 const MAX_ANSWER_MS = 480000; // an answer is sent after 8 minutes of recording, so constant background noise can't record forever
@@ -38,6 +44,8 @@ let micStream = null, audioCtx = null, analyser = null, levelBuf = null;
 let recorder = null, chunks = [];
 let answerGen = 0;            // bumps for each answer, so late interim transcripts are ignored
 let heardMs = 0, recordedMs = 0, lastVoiceAt = 0, listenStartedAt = 0, lastFrameAt = 0, noiseFloor = null;
+let peakRms = 0;              // loudest level heard in this answer, to tell a quiet mic from a silent one
+let voicedRunMs = 0;          // how long the level has been above the speech level without a break
 let rafId = 0, interimTimer = 0, interimBusy = false, interimOff = false, reviewTimer = 0;
 let previewPaused = false;    // live transcript refreshes stopped for this answer (INTERIM_MAX_MS reached)
 let startingListen = false;   // startListening is in progress (guards double clicks)
@@ -323,7 +331,7 @@ async function startListening() {
   } finally {
     startingListen = false;
   }
-  heardMs = 0; recordedMs = 0; lastVoiceAt = 0; noiseFloor = null; previewPaused = false;
+  heardMs = 0; recordedMs = 0; lastVoiceAt = 0; noiseFloor = null; peakRms = 0; voicedRunMs = 0; previewPaused = false;
   listenStartedAt = lastFrameAt = performance.now();
   $("liveTranscript").textContent = "";
   $("liveTranscript").classList.remove("final");
@@ -347,21 +355,39 @@ function levelLoop(now) {
 
   // Background level: drops straight to any quieter moment and creeps up slowly, so speech doesn't raise it.
   noiseFloor = noiseFloor === null || rms < noiseFloor ? rms : noiseFloor + (rms - noiseFloor) * 0.002;
-  if (phase === "listening") recordedMs += dt;
+  if (phase === "listening") { recordedMs += dt; peakRms = Math.max(peakRms, rms); }
   if (phase === "listening" && recordedMs >= MAX_ANSWER_MS) { finishAnswer(); return; }
   if (phase === "listening" && ttsSpeaking()) {
     lastVoiceAt = now;   // the interviewer's voice is not the answer
   } else if (phase === "listening" && now - listenStartedAt > 300) {
-    const threshold = Math.min(0.06, Math.max(0.012, noiseFloor * 2.5));
-    if (rms > threshold) { heardMs += dt; lastVoiceAt = now; }
+    const threshold = Math.min(0.06, Math.max(MIN_VOICE_RMS, noiseFloor * 2.5));
+    // Only sustained sound counts, so typing or desk taps in a quiet room don't keep resetting the silence timer.
+    voicedRunMs = rms > threshold ? voicedRunMs + dt : 0;
+    if (voicedRunMs >= VOICE_RUN_MS) { heardMs += dt; lastVoiceAt = now; }
     if (heardMs >= MIN_SPEECH_MS) {
       const quiet = now - lastVoiceAt;
       const limit = silenceLimit();
       if (quiet >= limit) { finishAnswer(); return; }
       $("stageState").textContent = listeningText(quiet, limit);
+    } else {
+      $("stageState").textContent = quietMicText();
     }
   }
   rafId = requestAnimationFrame(levelLoop);
+}
+
+// True when the mic has sent no sound at all, as opposed to a quiet voice. Only judged while the level meter
+// is running: a suspended AudioContext also reads as zero.
+function micSeemsSilent() {
+  return !!audioCtx && audioCtx.state === "running" && peakRms < SILENT_MIC_RMS;
+}
+
+// Status line before any speech is heard: says when the mic is silent or the voice is too quiet to pick up.
+function quietMicText() {
+  if (micSeemsSilent()) {
+    return recordedMs >= SILENT_HINT_MS ? "I can't hear your microphone. Check it isn't muted and that the right mic is selected." : "Listening… answer out loud";
+  }
+  return recordedMs >= QUIET_HINT_MS ? "I can barely hear you. Move closer to the mic, or press Done when you've finished." : "Listening… answer out loud";
 }
 
 // Short answers send after a short pause; long ones allow longer pauses to think.
@@ -457,6 +483,10 @@ async function refreshLiveTranscript() {
   interimBusy = false;
 }
 
+const NOTHING_HEARD = "I didn't catch anything. Try again, a little closer to the mic.";
+const SILENT_MIC_HELP = "Your microphone isn't sending any sound. Check it isn't muted, and that the right mic is " +
+  "chosen in your computer's sound settings (on a Mac: System Settings > Sound > Input) and in the browser's mic permission.";
+
 // Done, or a long enough silence: transcribe the whole answer, show it briefly, then send.
 async function finishAnswer() {
   if (phase !== "listening" && phase !== "paused") return;
@@ -468,30 +498,40 @@ async function finishAnswer() {
   const blob = await stopRecorder();
   recorder = null;
   if (gen !== answerGen || phase !== "transcribing") return;   // ended or switched to typing meanwhile
-  // Nothing was heard: don't send silence, which Whisper often turns into "Thank you."
-  if (!blob || !blob.size || heardMs < MIN_SPEECH_MS) { setPhase("error", "I didn't catch anything. Try again, a little closer to the mic.", startListening); return; }
-  transcribeAnswer(blob);
+  if (!blob || !blob.size) { setPhase("error", NOTHING_HEARD, startListening); return; }
+  // The mic sent no sound at all: say so, and don't send silence, which Whisper often turns into "Thank you."
+  if (heardMs < MIN_SPEECH_MS && micSeemsSilent()) { setPhase("error", SILENT_MIC_HELP, startListening); return; }
+  // Too short to be an answer.
+  if (heardMs < MIN_SPEECH_MS && recordedMs < MIN_DONE_MS) { setPhase("error", NOTHING_HEARD, startListening); return; }
+  // A longer recording is transcribed even if the meter heard little, since a quiet mic can sit below the speech
+  // level. Whisper can turn near-silence into "Thank you.", so the person confirms that transcript before it's sent.
+  transcribeAnswer(blob, heardMs < MIN_SPEECH_MS);
 }
 
 // Transcribes a recorded answer. If that fails, the recording is kept, so Try again resends the same audio
 // (a long answer shouldn't have to be spoken twice) and Record again starts over.
-async function transcribeAnswer(blob) {
+// With confirm set, the transcript waits for Send now instead of being sent after REVIEW_MS.
+async function transcribeAnswer(blob, confirm = false) {
   setPhase("transcribing", "Transcribing your answer…");
   const gen = ++answerGen;
   try {
     const data = await transcribe(blob);
     if (gen !== answerGen || phase !== "transcribing") return;   // ended or switched to typing meanwhile
     const text = (data.text || "").trim();
-    if (!text) { setPhase("error", "I didn't catch anything. Try again, a little closer to the mic.", startListening); return; }
+    if (!text) { setPhase("error", NOTHING_HEARD, startListening); return; }
     pendingTranscript = data.text;
     pendingSttMs = Number.isFinite(data.stt_ms) ? data.stt_ms : null;
     $("liveTranscript").textContent = text;
     $("liveTranscript").classList.add("final");
-    setPhase("review", "Sending your answer… press Edit if a word is wrong");
-    reviewTimer = setTimeout(sendReviewed, REVIEW_MS);
+    if (confirm) {
+      setPhase("review", "I could barely hear you. Is this what you said? Press Send now, or Edit to fix it.");
+    } else {
+      setPhase("review", "Sending your answer… press Edit if a word is wrong");
+      reviewTimer = setTimeout(sendReviewed, REVIEW_MS);
+    }
   } catch (err) {
     if (gen !== answerGen || phase !== "transcribing") return;
-    setPhase("error", `Couldn't transcribe that (${err.message.replace(/\.$/, "")}). Your recording is kept: press Try again to resend it.`, () => transcribeAnswer(blob));
+    setPhase("error", `Couldn't transcribe that (${err.message.replace(/\.$/, "")}). Your recording is kept: press Try again to resend it.`, () => transcribeAnswer(blob, confirm));
     $("recordAgainBtn").hidden = false;
   }
 }

@@ -1,451 +1,736 @@
-const API_BASE = "http://127.0.0.1:8000";
+// Interview room. API_BASE, the Supabase client (sb), accessToken, escHtml, initials and logout come from common.js,
+// which index.html loads first, so the backend address and Supabase keys live in one place.
+//
+// Flow: consent (step 1) -> resume (step 2) -> voice-first interview -> report.
+// In voice mode the interviewer reads each question aloud, then the mic opens on its own. The answer is sent after
+// a few seconds of silence (once the person has started talking), or when they press Done. Pause stops the silence timer.
+// Long answers get a longer pause allowance, so stopping to think mid-explanation doesn't send the answer.
+// "Type instead" switches to a text box. Per-answer scores and feedback are saved by the server but not shown
+// until the report, so they can't influence later answers.
+
+const SILENCE_MS = 3500;      // silence after speech that sends a short answer
+const LONG_SILENCE_MS = 6000; // silence that sends an answer once LONG_ANSWER_MS of speech has been heard
+const LONG_ANSWER_MS = 30000; // speech after which an answer counts as long (explaining a project, say)
+const MIN_SPEECH_MS = 300;    // voiced time needed before silence can send (so a cough or click doesn't)
+const MIN_VOICE_RMS = 0.005;  // quietest level that counts as speech (some Mac mics are much quieter than others)
+const SILENT_MIC_RMS = 0.001; // below this the whole time, the mic is sending no sound at all (muted or wrong input)
+const SILENT_HINT_MS = 4000;  // how long a silent mic is listened to before the status line says so
+const QUIET_HINT_MS = 10000;  // how long a mic that hears sound, but no speech, is listened to before a hint
+const VOICE_RUN_MS = 60;      // sound must stay above the speech level this long to count (a key tap or click is shorter)
+const MIN_DONE_MS = 1500;     // recording needed before Done sends an answer the level meter hardly heard
+const INTERIM_MS = 12000;     // how often the live transcript is refreshed while answering
+const INTERIM_MAX_MS = 60000; // no live refreshes after this much recording (each one re-sends the whole answer)
+const MAX_ANSWER_MS = 480000; // an answer is sent after 8 minutes of recording, so constant background noise can't record forever
+const MAX_WARN_MS = 60000;    // warn this long before MAX_ANSWER_MS sends the answer
+const AUDIO_BPS = 64000;      // recording bitrate: plenty for speech, and keeps 8 minutes well under the server's 10 MB cap
+const REVIEW_MS = 2000;       // time to press Edit before a transcribed answer is sent
+const MIN_QUESTIONS = 5, MAX_QUESTIONS = 12;   // MIN_QUESTIONS / MAX_QUESTIONS in services/rubric.py
+const SKILL_COUNT = 4;
+
 let session_id = "";
-let mediaRecorder;
-let audioChunks = [];
-let isRecording = false;
-let questionCount = 0;
-let totalScore = 0;
+let currentUser = null;
+let questionCount = 0;        // answers the server counted towards the report
+let settledCount = 0;         // skills the server considers settled
+let pendingSttMs = null;      // how long the last transcription took, sent with the answer
+let pendingTranscript = null; // the transcription itself, to tell "voice" from "voice_edited" answers
+let phase = "idle";           // thinking | speaking | listening | paused | transcribing | review | typing | error | done
+let interviewOpened = false;
 
-// ── Supabase client setup ─────────────────────────────────────────────────────
-// Supabase is our authentication provider. It handles user accounts, login, and JWT management.
-// We use the anon key here because we're only using Supabase for auth, and all sensitive operations are done in the backend where we verify the JWT.
-// The onAuthStateChange listener keeps our frontend in sync with the user's auth status (e.g. if they log out in another tab).
-const SUPABASE_URL  = "https://hincwkkvpdhaoyciailp.supabase.co";
-const SUPABASE_ANON = "sb_publishable_RyzMJZWK_hBE9qHpubmsIg_1LJNyHPp";
-const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON);
+let voiceOn = readPref("voiceOn", "true") !== "false";          // read questions aloud
+let mode = readPref("answerMode", "voice") === "type" ? "type" : "voice";
 
-let currentUser  = null;
-let accessToken  = null;
+// Mic and recording state
+let micStream = null, audioCtx = null, analyser = null, levelBuf = null;
+let recorder = null, chunks = [];
+let answerGen = 0;            // bumps for each answer, so late interim transcripts are ignored
+let heardMs = 0, recordedMs = 0, lastVoiceAt = 0, listenStartedAt = 0, lastFrameAt = 0, noiseFloor = null;
+let peakRms = 0;              // loudest level heard in this answer, to tell a quiet mic from a silent one
+let voicedRunMs = 0;          // how long the level has been above the speech level without a break
+let rafId = 0, interimTimer = 0, interimBusy = false, interimOff = false, reviewTimer = 0;
+let previewPaused = false;    // live transcript refreshes stopped for this answer (INTERIM_MAX_MS reached)
+let startingListen = false;   // startListening is in progress (guards double clicks)
+let ending = false;           // End was confirmed: nothing may reopen the mic or ask another question
+
+function readPref(key, fallback) {
+  try { return localStorage.getItem(key) ?? fallback; } catch (e) { return fallback; }
+}
+function savePref(key, value) {
+  try { localStorage.setItem(key, value); } catch (e) { /* storage blocked: keep the choice for this page only */ }
+}
+const $ = (id) => document.getElementById(id);
+
 // ── Session init ──────────────────────────────────────────────────────────────
-// This runs before anything else.
-// If the user is not logged in, they get kicked to auth.html immediately.
-// The page will appear blank for a split second — that's normal and correct.
-window.onload = async() => {
-  // getSession() reads the token from localStorage (Supabase stored it there
-  // when the user logged in on auth.html). It also auto-refreshes expired tokens.
+// Not signed in: go to auth.html straight away.
+window.onload = async () => {
   const { data: { session } } = await sb.auth.getSession();
-  if (!session) {
-    // No session = not logged in. Hard redirect.
-    window.location.href = "auth.html";
-    return; // stop everything below from running
-  }
-  // We have a valid session. Store what we need.
+  if (!session) { window.location.href = "auth.html"; return; }
   currentUser = session.user;
-  accessToken = session.access_token; // JWT we'll attach to every API call
-  // Show the user's name in the topbar
+  accessToken = session.access_token;   // JWT attached to every API call
   const name = currentUser.user_metadata?.full_name || currentUser.email.split("@")[0];
-  document.getElementById("userNameLabel").textContent = name;
-  // Keep accessToken fresh if Supabase refreshes the session in the background
+  $("userNameLabel").textContent = name;
+  $("userNameNav").textContent = name;
+  $("userInitials").textContent = initials(name);
   sb.auth.onAuthStateChange((_event, newSession) => {
-    if (newSession) {
-      accessToken = newSession.access_token;
-    } else {
-      // Session died (user deleted, token revoked, etc) — redirect to login
-      window.location.href = "auth.html";
-    }
-  }); 
-
-  await startSession();
-  // Auto-resize textarea
-  const ta = document.getElementById("history");
-  ta.addEventListener("input", () => {
-    ta.style.height = "auto";
-    ta.style.height = Math.min(ta.scrollHeight, 140) + "px";
+    if (newSession) accessToken = newSession.access_token;
+    else window.location.href = "auth.html";
   });
-  // Send on Ctrl+Enter / Cmd+Enter
+
+  // A practice interview from the dashboard passes its topic as ?focus=
+  const focus = new URLSearchParams(window.location.search).get("focus");
+  if (focus) { $("focusChip").textContent = "Practice focus: " + focus; $("focusChip").hidden = false; }
+
+  renderVoiceBtn();
+  const ta = $("history");
+  ta.addEventListener("input", () => { ta.style.height = "auto"; ta.style.height = Math.min(ta.scrollHeight, 140) + "px"; });
   ta.addEventListener("keydown", (e) => {
-    if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
-      e.preventDefault();
-      askAI();
-    }
+    if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); sendTyped(); }
   });
 };
-// ── LOGOUT ────────────────────────────────────────────────────────────────────
-// Clears the JWT from localStorage and ends the Supabase session.
-// After this, getSession() will return null — auth guard kicks them out.
-async function logout() {
-  await sb.auth.signOut();
-  window.location.href = "auth.html";
-}
-// ------------------------important note about auth-------------------------
-// The JWT (accessToken) is stored in localStorage by the Supabase SDK when the user logs in.
-// We read this token on page load and attach it to every API call in the authHeaders() function below.
-// FastAPI verifies this token on each request to authenticate the user.
-// If the token is missing/invalid/expired, the backend will reject the request and we can handle that in the frontend (e.g. show an error or redirect to login).
-// ── HELPER: attach auth header to every API call ──────────────────────────────
-// Instead of copy-pasting the Authorization header everywhere, use this.
-// FastAPI reads this header, verifies the JWT with Supabase, and gets user_id.
+
 function authHeaders(extra = {}) {
-  return {
-    "Authorization": `Bearer ${accessToken}`,  // JWT goes here
-    ...extra
-  };
+  return { "Authorization": `Bearer ${accessToken}`, ...extra };
 }
 
-async function startSession() {
-  try {
-    const res = await fetch(`${API_BASE}/start_interview`, { method: "POST",headers: authHeaders() });
-    const data = await res.json();
-    if (data.error) throw new Error(data.error);
+async function postJson(path, body) {
+  const res = await fetch(`${API_BASE}${path}`, {
+    method: "POST", headers: authHeaders({ "Content-Type": "application/json" }), body: JSON.stringify(body),
+  });
+  let data = {};
+  try { data = await res.json(); } catch (e) { /* non-JSON error page */ }
+  if (!res.ok || data.error) throw new Error(data.error || data.detail || `Server error ${res.status}`);
+  return data;
+}
 
+// ── Step 1: consent ───────────────────────────────────────────────────────────
+// The server rejects /start_interview without consent: true, and stores when it was given.
+async function acceptConsent() {
+  if (!$("consentBox").checked) { shakeElement("stepConsent"); return; }
+  const btn = $("consentBtn");
+  btn.disabled = true;
+  $("consentMsg").textContent = "Starting…";
+  try {
+    const focus = new URLSearchParams(window.location.search).get("focus");
+    const data = await postJson("/start_interview", { focus_topic: focus || null, consent: true });
     session_id = data.session_id;
-    document.getElementById("sessionIdLabel").textContent = "Session " + session_id.slice(0, 8);
-    document.getElementById("sessionBadge").classList.add("active");
-    setStatus("Session active — upload your resume or start answering");
+    $("sessionIdLabel").textContent = "Session " + session_id.slice(0, 8);
+    $("sessionBadge").classList.add("active");
+    $("stepConsent").hidden = true;
+    $("stepResume").hidden = false;
   } catch (err) {
-    document.getElementById("sessionIdLabel").textContent = "Connection failed";
-    setStatus("⚠ Could not connect to backend. Is it running?");
+    btn.disabled = false;
+    $("consentMsg").textContent = "Couldn't connect to the server. Is the backend running? " + err.message;
   }
 }
 
-// ── Resume upload ──────────────────────────────────────────────────────────────
+// ── Step 2: resume ────────────────────────────────────────────────────────────
 function handleFileSelect() {
-  const file = document.getElementById("resumeFile").files[0];
+  const file = $("resumeFile").files[0];
   if (!file) return;
-  const zone = document.getElementById("resumeZone");
-  document.getElementById("resumeZoneText").innerHTML =
-    `<strong>${file.name}</strong><br/><small style="font-size:11px;">Ready to upload</small>`;
+  $("resumeZoneText").innerHTML = `<strong>${escHtml(file.name)}</strong><br/><small>Ready to upload</small>`;
+  $("resumeMsg").textContent = "";
 }
 
 async function uploadResume() {
-  const fileInput = document.getElementById("resumeFile");
-  const file = fileInput.files[0];
-  if (!file) {
-    shakeElement("resumeZone");
-    return;
-  }
-  const btn = document.getElementById("uploadBtn");
+  primeAudio();
+  const file = $("resumeFile").files[0];
+  if (!file) { shakeElement("resumeZone"); $("resumeMsg").textContent = "Choose a PDF first, or start without a resume."; return; }
+  const btn = $("uploadBtn");
+  btn.disabled = true; $("skipResumeBtn").disabled = true;
   btn.textContent = "Uploading…";
-  btn.disabled = true;
-
   const formData = new FormData();
   formData.append("file", file);
-
   try {
-    const res = await fetch(`${API_BASE}/upload_resume?session_id=${session_id}`, {
-      method: "POST",
-      headers: authHeaders(), // Attach auth header with JWT
-      body: formData,
+    const res = await fetch(`${API_BASE}/upload_resume?session_id=${encodeURIComponent(session_id)}`, {
+      method: "POST", headers: authHeaders(), body: formData,
     });
     const data = await res.json();
-
-    const zone = document.getElementById("resumeZone");
-    zone.classList.add("uploaded");
-    zone.style.cursor = "default";
-    document.getElementById("resumeZoneText").innerHTML =
-      `✅ <strong>${file.name}</strong><br/><small style="font-size:11px;">Resume uploaded</small>`;
-
-    btn.textContent = "✓ Uploaded";
-    btn.style.borderColor = "var(--success)";
-    btn.style.color = "var(--success)";
-    setStatus("Resume uploaded — start answering questions below");
-    addAIMessage("Great! I've read your resume. Let's begin. Tell me a bit about yourself and your background.");
+    if (!res.ok || data.error) throw new Error(data.detail || data.error || "Upload failed");
+    $("resumeZone").classList.add("uploaded");
+    $("resumeZoneText").innerHTML = `<strong>${escHtml(file.name)}</strong><br/><small>Resume uploaded</small>`;
+    await openInterview();
   } catch (err) {
-    btn.textContent = "Upload Failed";
-    btn.style.borderColor = "var(--danger)";
-    btn.style.color = "var(--danger)";
-    btn.disabled = false;
-    console.error(err);
+    btn.textContent = "Upload and start";
+    btn.disabled = false; $("skipResumeBtn").disabled = false;
+    $("resumeMsg").textContent = "Resume upload failed: " + err.message;
   }
 }
 
-// ── Ask AI ─────────────────────────────────────────────────────────────────────
-async function askAI() {
-  const ta = document.getElementById("history");
-  const user = ta.value.trim();
-  if (!user) { shakeElement("history"); return; }
-
-  // Show user bubble
-  addUserMessage(user);
-  ta.value = "";
-  ta.style.height = "auto";
-  document.getElementById("charCount").textContent = "0";
-  document.getElementById("sendBtn").disabled = true;
-
-  // Show typing indicator
-  const typingId = addTypingIndicator();
-  setStatus("AI is thinking…");
-
+// ── Opening question ─────────────────────────────────────────────────────────
+// The opening /interview call has no answer yet (user is ""), so the server saves no chat_history row
+// and returns the AI's intro question. A repeated opening call gets the same stored question back.
+async function openInterview() {
+  if (interviewOpened) return;
+  interviewOpened = true;
+  primeAudio();
+  $("uploadBtn").disabled = true; $("skipResumeBtn").disabled = true;
+  // Ask for the mic now, while the click still counts as the user's action, so the prompt appears before the first question.
+  if (mode === "voice" && !(await ensureMic())) mode = "type";
+  $("stepResume").hidden = true;
+  $("stepRoom").hidden = false;
+  $("endBtn").hidden = false;
+  applyMode();
+  updateProgress();
+  setPhase("thinking", "Getting your first question…");
   try {
-    const res = await fetch(`${API_BASE}/interview`, {
-      method: "POST",
-      headers: authHeaders({ "Content-Type": "application/json" }), // Attach auth header with JWT
-      body: JSON.stringify({ session_id, user }),
-    });
-    const data = await res.json();
-    removeTypingIndicator(typingId);
+    const data = await postJson("/interview", { session_id, user: "" });
+    if (data.settled) settledCount = Object.values(data.settled).filter(Boolean).length;
+    askQuestion(data.question);
+  } catch (err) {
+    interviewOpened = false;
+    setPhase("error", "Couldn't get the first question: " + err.message, openInterview);
+  }
+}
 
-    if (data.error) {
-      addAIMessage("Sorry, something went wrong: " + data.error);
-      setStatus("Error occurred");
-    } else {
-      // Add AI question bubble
-      addAIMessage(data.question);
-      // Add feedback card
-      addFeedbackCard(data.feedback, data.score);
+// ── Asking a question ─────────────────────────────────────────────────────────
+function askQuestion(text) {
+  $("caption").textContent = text;
+  $("liveTranscript").textContent = "";
+  $("liveTranscript").classList.remove("final");
+  addLog("ai", text);
+  if (!voiceOn || !("speechSynthesis" in window)) { afterQuestion(); return; }
+  setPhase("speaking", "Interviewer is speaking…");
+  speak(text, afterQuestion);
+}
 
-      if (data.decision === "stop") {
-        setStatus("Interview completed — generating final report...");
-        await endInterview();
-        return;
-      }
+function afterQuestion() {
+  if (phase === "done" || ending) return;
+  if (mode === "voice") whenSilent(startListening);
+  else setPhase("typing", "Type your answer below");
+}
 
-      // Update stats
-      questionCount++;
-      totalScore += parseFloat(data.score) || 0;
-      document.getElementById("statQ").textContent = questionCount;
-      document.getElementById("statScore").innerHTML =
-        (totalScore / questionCount).toFixed(1) + '<span>/10</span>';
+// The mic must not hear the question: wait until the browser has finished speaking (the safety timer in speak()
+// can fire early), plus a short gap. Gives up waiting after 30 s and cuts the speech off.
+function whenSilent(fn) {
+  const started = performance.now();
+  const check = () => {
+    if (ending || phase === "done") return;
+    const talking = "speechSynthesis" in window && window.speechSynthesis.speaking;
+    if (talking && performance.now() - started < 30000) { setTimeout(check, 150); return; }
+    if (talking) stopSpeaking();
+    setTimeout(fn, 300);
+  };
+  check();
+}
 
-      setStatus(`Question ${questionCount} answered — keep going!`);
+function ttsSpeaking() {
+  return "speechSynthesis" in window && window.speechSynthesis.speaking;
+}
+
+// ── Read-aloud (browser text-to-speech) ───────────────────────────────────────
+// Uses the browser's built-in speechSynthesis, so it costs nothing and needs no server.
+// Text is spoken sentence by sentence because Chrome can stop long utterances part way, and a timer covers
+// browsers that never fire onend, so the mic always opens.
+let speechToken = 0;
+function speak(text, onDone) {
+  stopSpeaking();
+  const token = ++speechToken;
+  let finished = false;
+  const done = () => {
+    if (finished || token !== speechToken) return;
+    finished = true; clearTimeout(safety); onDone && onDone();
+  };
+  const words = text.split(/\s+/).length;
+  const safety = setTimeout(done, (words / 2.2) * 1000 + 4000);
+  const parts = text.match(/[^.!?]+[.!?]*\s*/g) || [text];
+  const voices = window.speechSynthesis.getVoices();
+  const voice = voices.find((v) => v.lang.startsWith("en") && /natural|google|online/i.test(v.name))
+    || voices.find((v) => v.lang.startsWith("en")) || null;
+  parts.forEach((part, i) => {
+    const u = new SpeechSynthesisUtterance(part.trim());
+    u.voice = voice; u.rate = 1;
+    if (i === parts.length - 1) { u.onend = done; }
+    u.onerror = done;
+    window.speechSynthesis.speak(u);
+  });
+}
+
+function stopSpeaking() {
+  speechToken++;
+  if ("speechSynthesis" in window) window.speechSynthesis.cancel();
+}
+
+function toggleVoice() {
+  voiceOn = !voiceOn;
+  savePref("voiceOn", voiceOn);
+  if (!voiceOn && phase === "speaking") { stopSpeaking(); afterQuestion(); }
+  renderVoiceBtn();
+}
+
+function renderVoiceBtn() {
+  const btn = $("voiceBtn");
+  btn.classList.toggle("off", !voiceOn);
+  btn.setAttribute("aria-pressed", String(voiceOn));
+  btn.title = voiceOn ? "The interviewer reads questions aloud (click to mute)" : "Questions are not read aloud (click to turn on)";
+  $("voiceLabel").textContent = voiceOn ? "Voice on" : "Voice off";
+}
+
+// Chrome loads its voice list asynchronously; assigning a handler starts loading it now.
+if ("speechSynthesis" in window) window.speechSynthesis.onvoiceschanged = () => {};
+
+// ── Microphone ────────────────────────────────────────────────────────────────
+// One mic stream for the whole interview, so the browser asks only once.
+async function ensureMic() {
+  if (micStream && micStream.getAudioTracks().some((t) => t.readyState === "live")) return true;
+  let stream = null;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+    primeAudio();
+    micStream = stream;
+    analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 1024;
+    levelBuf = new Float32Array(analyser.fftSize);
+    audioCtx.createMediaStreamSource(micStream).connect(analyser);
+    return true;
+  } catch (err) {
+    console.error(err);
+    if (stream) stream.getTracks().forEach((t) => t.stop());   // don't leave the mic on if the audio setup failed
+    micStream = null;
+    return false;
+  }
+}
+
+// Creates (or resumes) the AudioContext. Called from clicks, because Safari only starts audio inside one.
+function primeAudio() {
+  try {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === "suspended") audioCtx.resume().catch(() => {});
+  } catch (e) { /* no Web Audio: silence detection won't work, Done still does */ }
+}
+
+function releaseMic() {
+  if (micStream) micStream.getTracks().forEach((t) => t.stop());
+  micStream = null;
+  if (audioCtx) audioCtx.close().catch(() => {});
+  audioCtx = null; analyser = null;
+}
+
+async function startListening() {
+  if (startingListen || ending || mode !== "voice" || phase === "listening" || phase === "paused" || phase === "done") return;
+  startingListen = true;
+  try {
+    if (!(await ensureMic())) {
+      setMode("type", "Your microphone is blocked, so type your answer. Allow the mic in your browser to answer by voice.", false);
+      return;
     }
+    if (ending || mode !== "voice") return;
+    if (audioCtx.state === "suspended") await audioCtx.resume().catch(() => {});
+    if (recorder && recorder.state !== "inactive") recorder.stop();   // never two recorders at once
+    answerGen++;
+    const myChunks = [];          // each recorder writes to its own array
+    chunks = myChunks;
+    // Some browsers reject or ignore a bitrate, so fall back to their default.
+    try { recorder = new MediaRecorder(micStream, { audioBitsPerSecond: AUDIO_BPS }); }
+    catch (e) { recorder = new MediaRecorder(micStream); }
+    recorder.ondataavailable = (e) => { if (e.data && e.data.size) myChunks.push(e.data); };
+    recorder.start(1000);   // a chunk every second, so the live transcript can use what's recorded so far
   } catch (err) {
-    removeTypingIndicator(typingId);
-    addAIMessage("Connection error. Please check the backend is running.");
-    setStatus("Connection error");
     console.error(err);
+    recorder = null;
+    setMode("type", "Recording isn't supported in this browser, so type your answer.", false);
+    return;
+  } finally {
+    startingListen = false;
   }
-
-  document.getElementById("sendBtn").disabled = false;
+  heardMs = 0; recordedMs = 0; lastVoiceAt = 0; noiseFloor = null; peakRms = 0; voicedRunMs = 0; previewPaused = false;
+  listenStartedAt = lastFrameAt = performance.now();
+  $("liveTranscript").textContent = "";
+  $("liveTranscript").classList.remove("final");
+  setPhase("listening", "Listening… answer out loud");
+  cancelAnimationFrame(rafId);
+  rafId = requestAnimationFrame(levelLoop);
+  clearInterval(interimTimer);
+  interimTimer = setInterval(refreshLiveTranscript, INTERIM_MS);
 }
 
-// ── End interview ──────────────────────────────────────────────────────────────
-async function endInterview() {
-  if (questionCount === 0) {
-    shakeElement("emptyState");
+// Reads the mic level each frame: drives the orb, and sends the answer after silenceLimit() of silence.
+function levelLoop(now) {
+  if (phase !== "listening" && phase !== "paused") { setLevel(0); return; }
+  const dt = Math.min(100, now - lastFrameAt); lastFrameAt = now;   // capped, so a frozen frame can't count as long silence or speech
+  if (!analyser) return;
+  analyser.getFloatTimeDomainData(levelBuf);
+  let sum = 0;
+  for (let i = 0; i < levelBuf.length; i++) sum += levelBuf[i] * levelBuf[i];
+  const rms = Math.sqrt(sum / levelBuf.length);
+  setLevel(phase === "paused" ? 0 : Math.min(1, rms / 0.12));
+
+  // Background level: drops straight to any quieter moment and creeps up slowly, so speech doesn't raise it.
+  noiseFloor = noiseFloor === null || rms < noiseFloor ? rms : noiseFloor + (rms - noiseFloor) * 0.002;
+  if (phase === "listening") { recordedMs += dt; peakRms = Math.max(peakRms, rms); }
+  if (phase === "listening" && recordedMs >= MAX_ANSWER_MS) { finishAnswer(); return; }
+  if (phase === "listening" && ttsSpeaking()) {
+    lastVoiceAt = now;   // the interviewer's voice is not the answer
+  } else if (phase === "listening" && now - listenStartedAt > 300) {
+    const threshold = Math.min(0.06, Math.max(MIN_VOICE_RMS, noiseFloor * 2.5));
+    // Only sustained sound counts, so typing or desk taps in a quiet room don't keep resetting the silence timer.
+    voicedRunMs = rms > threshold ? voicedRunMs + dt : 0;
+    if (voicedRunMs >= VOICE_RUN_MS) { heardMs += dt; lastVoiceAt = now; }
+    if (heardMs >= MIN_SPEECH_MS) {
+      const quiet = now - lastVoiceAt;
+      const limit = silenceLimit();
+      if (quiet >= limit) { finishAnswer(); return; }
+      $("stageState").textContent = listeningText(quiet, limit);
+    } else {
+      $("stageState").textContent = quietMicText();
+    }
+  }
+  rafId = requestAnimationFrame(levelLoop);
+}
+
+// True when the mic has sent no sound at all, as opposed to a quiet voice. Only judged while the level meter
+// is running: a suspended AudioContext also reads as zero.
+function micSeemsSilent() {
+  return !!audioCtx && audioCtx.state === "running" && peakRms < SILENT_MIC_RMS;
+}
+
+// Status line before any speech is heard: says when the mic is silent or the voice is too quiet to pick up.
+function quietMicText() {
+  if (micSeemsSilent()) {
+    return recordedMs >= SILENT_HINT_MS ? "I can't hear your microphone. Check it isn't muted and that the right mic is selected." : "Listening… answer out loud";
+  }
+  return recordedMs >= QUIET_HINT_MS ? "I can barely hear you. Move closer to the mic, or press Done when you've finished." : "Listening… answer out loud";
+}
+
+// Short answers send after a short pause; long ones allow longer pauses to think.
+function silenceLimit() {
+  return heardMs >= LONG_ANSWER_MS ? LONG_SILENCE_MS : SILENCE_MS;
+}
+
+// Status line while listening: a countdown once the person goes quiet, and a warning near the length limit.
+function listeningText(quiet, limit) {
+  const left = MAX_ANSWER_MS - recordedMs;
+  const sending = quiet > 1500 ? `sending in ${Math.ceil((limit - quiet) / 1000)} s` : "";
+  if (left <= MAX_WARN_MS) {
+    const warn = `About ${Math.ceil(left / 1000)} s left for this answer`;
+    return sending ? `${warn}… ${sending}` : `${warn}… wrap up, or press Done`;
+  }
+  if (sending) return `S${sending.slice(1)}… keep talking to continue, or press Pause`;
+  return "Listening…";
+}
+
+// Animation frames stop in a hidden tab; on return, restart the silence timer instead of sending at once.
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) { lastVoiceAt = lastFrameAt = performance.now(); }
+});
+
+function setLevel(v) {
+  $("orbWrap").style.setProperty("--level", v.toFixed(3));
+}
+
+function togglePause() {
+  if (phase === "listening") {
+    if (recorder && recorder.state === "recording") recorder.pause();
+    setPhase("paused", "Paused. Take your time, then press Resume or Done.");
+  } else if (phase === "paused") {
+    if (recorder && recorder.state === "paused") recorder.resume();
+    lastVoiceAt = performance.now();   // the silence timer starts again from now
+    setPhase("listening", "Listening… answer out loud");
+    rafId = requestAnimationFrame(levelLoop);
+  }
+}
+
+function stopRecorder() {
+  return new Promise((resolve) => {
+    if (!recorder || recorder.state === "inactive") { resolve(null); return; }
+    const type = recorder.mimeType || "audio/webm";
+    recorder.onstop = () => resolve(new Blob(chunks, { type }));
+    recorder.stop();
+  });
+}
+
+function stopListening() {
+  clearInterval(interimTimer);
+  cancelAnimationFrame(rafId);
+  answerGen++;
+  if (recorder && recorder.state !== "inactive") recorder.stop();
+  recorder = null;
+  setLevel(0);
+}
+
+async function transcribe(blob) {
+  // Safari records mp4 and Firefox ogg, so keep the recorder's real type and a matching extension.
+  const ext = blob.type.includes("mp4") ? "mp4" : blob.type.includes("ogg") ? "ogg" : "webm";
+  const formData = new FormData();
+  formData.append("file", blob, `recording.${ext}`);
+  const res = await fetch(`${API_BASE}/speech_to_text?session_id=${encodeURIComponent(session_id)}`, {
+    method: "POST", headers: authHeaders(), body: formData,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) { const err = new Error(data.detail || "Transcription failed"); err.status = res.status; throw err; }
+  return data;
+}
+
+// Shows what has been heard so far, faintly, so a misheard word can be caught. Failures are ignored.
+async function refreshLiveTranscript() {
+  if (interimBusy || interimOff || phase !== "listening" || heardMs < MIN_SPEECH_MS || !chunks.length) return;
+  if (recordedMs > INTERIM_MAX_MS) {
+    // Say so once, so a frozen preview doesn't look like the mic stopped hearing.
+    if (!previewPaused) {
+      previewPaused = true;
+      const el = $("liveTranscript");
+      el.textContent = (el.textContent ? el.textContent + " … " : "") + "(live preview paused, your full answer is still being recorded)";
+    }
     return;
   }
-  setStatus("Generating your final report…");
-  const typingId = addTypingIndicator();
-
+  interimBusy = true;
+  const gen = answerGen;
   try {
-    const res = await fetch(`${API_BASE}/end_interview`, {
-      method: "POST",
-      headers: authHeaders({ "Content-Type": "application/json" }), // Attach auth header with JWT
-      body: JSON.stringify({ session_id, user: "" }),
-    });
-    const data = await res.json();
-    //data from server
-    //"total_questions":len(history),
-    //    "average_score":avg_score,
-    //    "llm_score":parsed.get("score",0),
-    //    "feedback":parsed.get("feedback","No feedback provided"),
-    //    "improvements":parsed.get("improvements","No improvements provided"),
-    //    "status":"interview completed"
-    removeTypingIndicator(typingId);
-    addReportCard(data);
-    setStatus("Interview complete — check your report below");
-  } catch (err) {
-    removeTypingIndicator(typingId);
-    addAIMessage("Couldn't generate report. Please try again.");
-    console.error(err);
+    const data = await transcribe(new Blob(chunks, { type: recorder ? recorder.mimeType || "audio/webm" : "audio/webm" }));
+    if (gen === answerGen && (phase === "listening" || phase === "paused")) $("liveTranscript").textContent = data.text;
+  } catch (e) {
+    // The final transcript is what counts. If Groq is rate limiting, stop live refreshes for the rest of the interview.
+    if (e.status === 429) interimOff = true;
   }
+  interimBusy = false;
 }
 
-// ── Recording ──────────────────────────────────────────────────────────────────
-async function toggleRecording() {
-  if (!isRecording) {
-    await startRecording();
-  } else {
-    stopRecording();
-  }
+const NOTHING_HEARD = "I didn't catch anything. Try again, a little closer to the mic.";
+const SILENT_MIC_HELP = "Your microphone isn't sending any sound. Check it isn't muted, and that the right mic is " +
+  "chosen in your computer's sound settings (on a Mac: System Settings > Sound > Input) and in the browser's mic permission.";
+
+// Done, or a long enough silence: transcribe the whole answer, show it briefly, then send.
+async function finishAnswer() {
+  if (phase !== "listening" && phase !== "paused") return;
+  clearInterval(interimTimer);
+  cancelAnimationFrame(rafId);
+  setLevel(0);
+  setPhase("transcribing", "Transcribing your answer…");
+  const gen = ++answerGen;
+  const blob = await stopRecorder();
+  recorder = null;
+  if (gen !== answerGen || phase !== "transcribing") return;   // ended or switched to typing meanwhile
+  if (!blob || !blob.size) { setPhase("error", NOTHING_HEARD, startListening); return; }
+  // The mic sent no sound at all: say so, and don't send silence, which Whisper often turns into "Thank you."
+  if (heardMs < MIN_SPEECH_MS && micSeemsSilent()) { setPhase("error", SILENT_MIC_HELP, startListening); return; }
+  // Too short to be an answer.
+  if (heardMs < MIN_SPEECH_MS && recordedMs < MIN_DONE_MS) { setPhase("error", NOTHING_HEARD, startListening); return; }
+  // A longer recording is transcribed even if the meter heard little, since a quiet mic can sit below the speech
+  // level. Whisper can turn near-silence into "Thank you.", so the person confirms that transcript before it's sent.
+  transcribeAnswer(blob, heardMs < MIN_SPEECH_MS);
 }
 
-async function startRecording() {
+// Transcribes a recorded answer. If that fails, the recording is kept, so Try again resends the same audio
+// (a long answer shouldn't have to be spoken twice) and Record again starts over.
+// With confirm set, the transcript waits for Send now instead of being sent after REVIEW_MS.
+async function transcribeAnswer(blob, confirm = false) {
+  setPhase("transcribing", "Transcribing your answer…");
+  const gen = ++answerGen;
   try {
-    audioChunks = [];
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    mediaRecorder = new MediaRecorder(stream);
-    mediaRecorder.ondataavailable = (e) => audioChunks.push(e.data);
-    mediaRecorder.start();
-    isRecording = true;
-
-    const btn = document.getElementById("recordBtn");
-    btn.classList.add("recording");
-    document.getElementById("recordLabel").textContent = "Stop";
-    setStatus("🔴 Recording… click Stop when done");
-  } catch (err) {
-    alert("Microphone access denied. Please allow mic access in browser.");
-  }
-}
-
-function stopRecording() {
-  if (!mediaRecorder) return;
-  mediaRecorder.stop();
-  isRecording = false;
-
-  const btn = document.getElementById("recordBtn");
-  btn.classList.remove("recording");
-  document.getElementById("recordLabel").textContent = "Speak";
-  setStatus("Transcribing audio…");
-
-  mediaRecorder.onstop = async () => {
-    try {
-      mediaRecorder.stream.getTracks().forEach((t) => t.stop());
-      const audioBlob = new Blob(audioChunks, { type: "audio/webm" });
-      const formData = new FormData();
-      formData.append("file", audioBlob, "recording.webm");
-
-      document.getElementById("history").value = "Transcribing…";
-
-      const res = await fetch(`${API_BASE}/speech_to_text`, { method: "POST", headers: authHeaders(), body: formData });
-      const data = await res.json();
-      document.getElementById("history").value = data.text;
-      document.getElementById("charCount").textContent = data.text.length;
-      setStatus("Transcription done — review and send");
-    } catch (err) {
-      document.getElementById("history").value = "";
-      setStatus("Transcription failed");
-      console.error(err);
+    const data = await transcribe(blob);
+    if (gen !== answerGen || phase !== "transcribing") return;   // ended or switched to typing meanwhile
+    const text = (data.text || "").trim();
+    if (!text) { setPhase("error", NOTHING_HEARD, startListening); return; }
+    pendingTranscript = data.text;
+    pendingSttMs = Number.isFinite(data.stt_ms) ? data.stt_ms : null;
+    $("liveTranscript").textContent = text;
+    $("liveTranscript").classList.add("final");
+    if (confirm) {
+      setPhase("review", "I could barely hear you. Is this what you said? Press Send now, or Edit to fix it.");
+    } else {
+      setPhase("review", "Sending your answer… press Edit if a word is wrong");
+      reviewTimer = setTimeout(sendReviewed, REVIEW_MS);
     }
-    audioChunks = [];
-  };
+  } catch (err) {
+    if (gen !== answerGen || phase !== "transcribing") return;
+    setPhase("error", `Couldn't transcribe that (${err.message.replace(/\.$/, "")}). Your recording is kept: press Try again to resend it.`, () => transcribeAnswer(blob, confirm));
+    $("recordAgainBtn").hidden = false;
+  }
 }
 
-// ── DOM helpers ────────────────────────────────────────────────────────────────
-function hideEmptyState() {
-  const es = document.getElementById("emptyState");
-  if (es) es.remove();
+function sendReviewed() {
+  clearTimeout(reviewTimer);
+  if (phase !== "review") return;
+  submitAnswer(pendingTranscript.trim(), "voice");
 }
 
-function addUserMessage(text) {
-  hideEmptyState();
-  const chat = document.getElementById("chat");
+function editTranscript() {
+  clearTimeout(reviewTimer);
+  const text = pendingTranscript;   // kept, so sending it unchanged still counts as "voice"
+  setMode("type", "Fix any words, then send", false);
+  $("history").value = text;
+  onInputChange($("history"));
+}
+
+// ── Typing ────────────────────────────────────────────────────────────────────
+function sendTyped() {
+  const ta = $("history");
+  const text = ta.value.trim();
+  if (!text) { shakeElement("history"); return; }
+  if (phase === "thinking" || phase === "done") return;
+  // Saved with the turn for the research data: was this answer spoken, and was the transcript edited?
+  const inputMode = pendingTranscript === null ? "typed" : text === pendingTranscript.trim() ? "voice" : "voice_edited";
+  submitAnswer(text, inputMode);
+}
+
+// save is false when the page switches by itself (blocked mic, a failed send), so the choice isn't remembered.
+function setMode(next, message, save = true) {
+  clearTimeout(reviewTimer);
+  if (ending || phase === "done") return;
+  mode = next;
+  if (save) savePref("answerMode", next);
+  if (next === "voice") primeAudio();
+  applyMode();
+  if (next === "type") {
+    if (phase === "listening" || phase === "paused" || phase === "transcribing" || phase === "review" || phase === "error") {
+      stopListening();
+      setPhase("typing", message || "Type your answer below");
+    }
+    $("history").focus();
+  } else {
+    $("history").value = "";
+    onInputChange($("history"));
+    pendingTranscript = null; pendingSttMs = null;
+    if (phase === "typing" || phase === "error") startListening();
+  }
+}
+
+function applyMode() {
+  $("composer").hidden = mode !== "type";
+}
+
+// ── Sending an answer ─────────────────────────────────────────────────────────
+async function submitAnswer(text, inputMode) {
+  stopSpeaking();
+  addLog("user", text);
+  $("history").value = "";
+  onInputChange($("history"));
+  $("liveTranscript").textContent = "";
+  setPhase("thinking", "Thinking about your answer…");
+  try {
+    const data = await postJson("/interview", {
+      session_id, user: text, stt_ms: inputMode === "typed" ? null : pendingSttMs, input_mode: inputMode,
+    });
+    if (phase === "done" || ending) return;
+    pendingSttMs = null; pendingTranscript = null;
+    if (data.counted) questionCount++;
+    if (data.settled) settledCount = Object.values(data.settled).filter(Boolean).length;
+    if (data.decision === "stop") { await endInterview(true); return; }
+    updateProgress();
+    askQuestion(data.question);
+  } catch (err) {
+    if (phase === "done" || ending) return;
+    // The answer wasn't saved: put it back for resending, keeping its voice details.
+    removeLastLog();
+    setMode("type", "Your answer wasn't sent (" + err.message + "). Press send to try again.", false);
+    $("history").value = text;
+    onInputChange($("history"));
+  }
+}
+
+// ── Progress ──────────────────────────────────────────────────────────────────
+// A soft bar: the question count, nudged forward as skills settle (the interview can end anywhere from 5 to 12).
+function updateProgress() {
+  const n = Math.min(questionCount + 1, MAX_QUESTIONS);
+  $("progressText").textContent = `Question ${n}`;
+  const byCount = questionCount / MAX_QUESTIONS;
+  const bySkills = (settledCount / SKILL_COUNT) * Math.min(1, questionCount / MIN_QUESTIONS);
+  $("progressFill").style.width = Math.round(Math.min(1, Math.max(byCount, bySkills)) * 100) + "%";
+}
+
+// ── Stage state ───────────────────────────────────────────────────────────────
+function setPhase(next, text, retry) {
+  phase = next;
+  $("orbWrap").dataset.state = next;
+  $("stageState").textContent = text || "";
+  $("stageNote").textContent = "";
+  $("voiceActions").hidden = !(next === "listening" || next === "paused");
+  $("reviewActions").hidden = next !== "review";
+  $("retryActions").hidden = next !== "error";
+  if (retry) $("retryBtn").onclick = () => retry();
+  $("retryActions").querySelectorAll(".btn").forEach((b) => { b.hidden = false; });
+  $("recordAgainBtn").hidden = true;   // only shown when a failed transcription kept a recording
+  $("pauseLabel").textContent = next === "paused" ? "Resume" : "Pause";
+  $("sendBtn").disabled = next === "thinking" || next === "done";
+}
+
+// ── Chat log (hidden unless "Show chat") ──────────────────────────────────────
+function toggleChat() {
+  const log = $("chat");
+  log.hidden = !log.hidden;
+  $("stepRoom").classList.toggle("with-chat", !log.hidden);
+  $("chatToggle").setAttribute("aria-pressed", String(!log.hidden));
+  $("chatToggle").querySelector("span").textContent = log.hidden ? "Show chat" : "Hide chat";
+  if (!log.hidden) log.scrollTop = log.scrollHeight;
+}
+
+function addLog(who, text) {
   const row = document.createElement("div");
-  row.className = "msg-row user";
-  row.innerHTML = `
-    <div class="bubble user">${escHtml(text)}</div>
-    <div class="avatar user">You</div>
-  `;
-  chat.appendChild(row);
-  scrollToBottom();
+  row.className = "msg-row" + (who === "user" ? " user" : "");
+  row.innerHTML = who === "user"
+    ? `<div class="bubble user">${escHtml(text)}</div><div class="avatar user">You</div>`
+    : `<div class="avatar ai">AI</div><div class="bubble ai">${escHtml(text)}</div>`;
+  $("chat").appendChild(row);
+  $("chat").scrollTop = $("chat").scrollHeight;
 }
 
-function addAIMessage(text) {
-  hideEmptyState();
-  const chat = document.getElementById("chat");
-  const row = document.createElement("div");
-  row.className = "msg-row";
-  row.innerHTML = `
-    <div class="avatar ai">AI</div>
-    <div class="bubble ai">${escHtml(text)}</div>
-  `;
-  chat.appendChild(row);
-  scrollToBottom();
+function removeLastLog() {
+  const last = $("chat").lastElementChild;
+  if (last && last.classList.contains("user")) last.remove();
 }
 
-function addFeedbackCard(feedback, score) {
-  const chat = document.getElementById("chat");
-  const s = parseFloat(score) || 0;
-  const pillClass = s >= 7 ? "good" : s >= 4 ? "ok" : "low";
-  const card = document.createElement("div");
-  card.className = "feedback-card";
-  card.innerHTML = `
-    <div class="feedback-card-header">
-      <span class="feedback-label">Feedback</span>
-      <span class="score-pill ${pillClass}">${s}/10</span>
-    </div>
-    <div>${escHtml(feedback)}</div>
-  `;
-  chat.appendChild(card);
-  scrollToBottom();
+// ── End interview ─────────────────────────────────────────────────────────────
+async function endInterview(auto = false) {
+  if (phase === "done" || (ending && !auto)) return;
+  if (!auto) {
+    if (phase === "thinking" || phase === "transcribing") {
+      $("stageNote").textContent = "Your answer is being sent. End the interview once the next question appears.";
+      return;
+    }
+    if (questionCount === 0) { $("stageNote").textContent = "Answer at least one question before ending."; shakeElement("endBtn"); return; }
+    const ok = confirm("End the interview now and see your report?");
+    lastVoiceAt = lastFrameAt = performance.now();   // the dialog froze the silence timer; don't count that time
+    if (!ok) return;
+  }
+  ending = true;
+  clearTimeout(reviewTimer);
+  stopSpeaking();
+  stopListening();
+  releaseMic();   // no more answers, so the mic goes off now, even if the report fails
+  $("endBtn").hidden = true;
+  setPhase("thinking", "Writing your report…");
+  $("caption").textContent = "";
+  try {
+    // On success the server returns total_questions, average_score, llm_score, feedback, improvements,
+    // skill_scores, weak_topics, suggested_topics and interview_id (see report_response in server.py).
+    const data = await postJson("/end_interview", { session_id, user: "" });
+    phase = "done";
+    showReport(data);
+  } catch (err) {
+    setPhase("error", "Couldn't create the report: " + err.message, () => endInterview(true));
+    $("retryActions").querySelectorAll(".btn:not(.primary)").forEach((b) => { b.hidden = true; });   // only Try again here
+  }
 }
 
-function addReportCard(data) {
-  const chat = document.getElementById("chat");
+function showReport(data) {
   const avg = parseFloat(data.average_score) || 0;
   const llm = parseFloat(data.llm_score) || 0;
-  const pillClass = avg >= 7 ? "good" : avg >= 4 ? "ok" : "low";
-
-  const card = document.createElement("div");
-  card.className = "report-card";
-  card.innerHTML = `
-    <h3>Interview Complete</h3> 
-    <div class="report-row">
-      <span class="report-row-label">Total Questions</span>
-      <span class="report-row-val">${data.total_questions}</span>
-    </div>
-    <div class="report-row">
-      <span class="report-row-label">Average Score</span>
-      <span class="report-row-val"><span class="score-pill ${pillClass}">${avg.toFixed(1)}/10</span></span>
-    </div>
-    <div class="report-row">
-      <span class="report-row-label">Final AI Score</span>
-      <span class="report-row-val">
-        <span class="score-pill ${pillClass}">${llm}/10</span>
-      </span>
-    </div>
-
-    <div class="report-row">
-      <span class="report-row-label">Status</span>
-      <span class="report-row-val">${escHtml(data.status)}</span>
-    </div>
-
-    <div style="margin-top:14px; padding-top:14px; border-top:1px solid var(--border2);">
-      <div style="font-size:10.5px; font-weight:600; letter-spacing:.8px; text-transform:uppercase; color:var(--accent-dark); margin-bottom:6px;">Feedback</div>
-      <div style="font-size:13.5px; color:var(--text-primary); line-height:1.65;">${escHtml(data.feedback)}</div>
-    </div>
-
-    <div style="margin-top:14px; padding-top:14px; border-top:1px solid var(--border2);">
-      <div style="font-size:10.5px; font-weight:600; letter-spacing:.8px; text-transform:uppercase; color:var(--accent-dark); margin-bottom:6px;">Areas to Improve</div>
-      <div style="font-size:13.5px; color:var(--text-primary); line-height:1.65;">${escHtml(data.improvements)}</div>
-    </div>
-  `;
-  chat.appendChild(card);
-  scrollToBottom();
+  $("stepRoom").hidden = true;
+  const el = $("stepDone");
+  el.hidden = false;
+  el.innerHTML = `
+    <div class="panel report-card">
+      <div class="eyebrow">Interview complete</div>
+      <h2 class="step-title">Here's how it went</h2>
+      <div class="result-scores">
+        <div class="stat-card"><div class="stat-card-label">Questions</div><div class="stat-card-val num">${escHtml(String(data.total_questions))}</div></div>
+        <div class="stat-card"><div class="stat-card-label">Average score</div><div class="stat-card-val num">${avg.toFixed(1)}<span>/10</span></div></div>
+        <div class="stat-card"><div class="stat-card-label">Interviewer's score</div><div class="stat-card-val num">${fmtScore(llm)}<span>/10</span></div></div>
+      </div>
+      <div class="result-block"><div class="eyebrow">Feedback</div><p>${escHtml(data.feedback || "")}</p></div>
+      <div class="result-block"><div class="eyebrow">Areas to improve</div><p>${escHtml(data.improvements || "")}</p></div>
+      <div class="report-actions">
+        ${data.interview_id ? `<a class="btn primary" href="report.html?id=${encodeURIComponent(data.interview_id)}">Open full report</a>` : ""}
+        <a class="btn" href="dashboard.html">Back to dashboard</a>
+      </div>
+    </div>`;
 }
 
-function addTypingIndicator() {
-  hideEmptyState();
-  const chat = document.getElementById("chat");
-  const id = "typing-" + Date.now();
-  const row = document.createElement("div");
-  row.className = "msg-row";
-  row.id = id;
-  row.innerHTML = `
-    <div class="avatar ai">AI</div>
-    <div class="typing-indicator">
-      <div class="typing-dot"></div>
-      <div class="typing-dot"></div>
-      <div class="typing-dot"></div>
-    </div>
-  `;
-  chat.appendChild(row);
-  scrollToBottom();
-  return id;
-}
-
-function removeTypingIndicator(id) {
-  const el = document.getElementById(id);
-  if (el) el.remove();
-}
-
-function setStatus(msg) {
-  document.getElementById("chatStatusBar").innerHTML = `
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15"><circle cx="12" cy="12" r="10"/><path d="M12 8v4l3 3"/></svg>
-    ${escHtml(msg)}
-  `;
-}
-
+// ── Small helpers ─────────────────────────────────────────────────────────────
 function onInputChange(el) {
-  document.getElementById("charCount").textContent = el.value.length;
-}
-
-function scrollToBottom() {
-  const chat = document.getElementById("chat");
-  chat.scrollTop = chat.scrollHeight;
-}
-
-function escHtml(str) {
-  return String(str)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
+  $("charCount").textContent = el.value.length;
 }
 
 function shakeElement(id) {
-  const el = document.getElementById(id);
+  const el = $(id);
   if (!el) return;
   el.style.animation = "none";
   el.offsetHeight; // reflow
@@ -453,7 +738,6 @@ function shakeElement(id) {
   setTimeout(() => (el.style.animation = ""), 400);
 }
 
-// Shake keyframe injected once
 const shakeStyle = document.createElement("style");
 shakeStyle.textContent = `@keyframes shake { 0%,100%{transform:translateX(0)} 25%{transform:translateX(-6px)} 75%{transform:translateX(6px)} }`;
 document.head.appendChild(shakeStyle);

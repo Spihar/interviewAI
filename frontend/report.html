@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=DM+Mono:wght@400;500&family=Fraunces:opsz,wght@9..144,500;9..144,600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="theme.css?v=8" />
+  <script src="theme.js?v=8"></script>
+  <title>InterviewAI · Report</title>
+  <link rel="stylesheet" href="dashboard.css?v=9" />
+</head>
+<body>
+<div class="shell">
+  <nav class="nav" aria-label="Main">
+    <a class="brand" href="dashboard.html"><i>AI</i>InterviewAI</a>
+    <a class="nav-link" href="dashboard.html" data-nav="dashboard" aria-current="page"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg><span>Dashboard</span></a>
+    <a class="nav-link" href="index.html" data-nav="interview"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg><span>New interview</span></a>
+    <div class="nav-foot">
+      <button class="nav-link" data-theme-toggle type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg><span>Dark mode</span></button>
+      <button class="nav-link" onclick="logout()" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/></svg><span>Sign out</span></button>
+      <div class="me"><div class="avatar-chip" data-user-initials></div><span data-user-name></span></div>
+    </div>
+  </nav>
+  <main class="page">
+    <section class="wrap">
+      <div class="head">
+        <div>
+          <div class="eyebrow" id="meta">Report</div>
+          <h1 class="title" id="title">Loading report…</h1>
+        </div>
+        <div class="head-actions">
+          <a class="btn" href="dashboard.html">Back to dashboard</a>
+          <a class="btn primary" id="practiceBtn" href="index.html">Start new interview</a>
+        </div>
+      </div>
+
+      <div class="alert-bar" id="errorBar" hidden></div>
+
+      <div id="body" hidden class="wrap" style="gap:20px;width:100%">
+        <div class="panel summary">
+          <div class="ring">
+            <svg viewBox="0 0 36 36"><circle cx="18" cy="18" r="15.5" fill="none" stroke="var(--line)" stroke-width="3"/><circle id="ringArc" cx="18" cy="18" r="15.5" fill="none" stroke="var(--accent)" stroke-width="3" stroke-linecap="round" stroke-dasharray="0 97.4"/></svg>
+            <div class="lbl"><div><b class="num" id="ringVal">–</b><small>out of 10</small></div></div>
+          </div>
+          <div class="txt">
+            <div class="eyebrow">Overall feedback</div>
+            <p id="feedback"></p>
+            <div class="chips" id="summaryChips"></div>
+          </div>
+        </div>
+
+        <!-- Left column stacks "Per skill" and "Areas to improve" so it roughly matches the height of "Focus next" on the right. -->
+        <div class="grid g-2-1">
+          <div class="col">
+            <div class="panel">
+              <div class="panel-h"><h2 class="panel-title">Per skill</h2>
+                <div class="legend static"><span><i style="background:var(--accent)"></i>This interview</span><span id="prevLegend"><i style="background:var(--line)"></i>Previous</span></div>
+              </div>
+              <div id="cmp"></div>
+            </div>
+            <div class="panel grow">
+              <div class="panel-h"><h2 class="panel-title">Areas to improve</h2></div>
+              <p class="prose" id="improvements"></p>
+            </div>
+          </div>
+          <div class="panel">
+            <div class="panel-h"><h2 class="panel-title">Focus next</h2></div>
+            <div class="list" id="focusNext"></div>
+            <button class="btn sm focus-more" id="focusMore" type="button" aria-controls="focusNext" hidden></button>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-h"><h2 class="panel-title">Question by question</h2><span class="hint">Open a question to see your answer and why it got that score</span></div>
+          <div id="answers"></div>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4"></script>
+<script src="common.js?v=9"></script>
+<script src="report.js?v=9"></script>
+</body>
+</html>

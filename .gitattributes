@@ -1,0 +1,2 @@
+# Shell scripts must keep Linux line endings (LF), or ./test.sh fails with "bad interpreter" on Windows checkouts.
+*.sh text eol=lf

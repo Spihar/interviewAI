@@ -1,0 +1,36 @@
+# Files Docker must not copy into the image (like .gitignore, but for `docker build`).
+
+# Secrets: mounted at run time instead (see the Dockerfile), so the image is safe to share or upload.
+# Plain patterns only match the top folder, so **/ also catches a .env inside any subfolder.
+.env
+.env.*
+**/.env
+**/.env.*
+
+# Local Python environments and caches: the image installs its own packages from requirements.txt.
+venv/
+.venv/
+__pycache__/
+*.pyc
+**/__pycache__
+**/*.pyc
+
+# Research data and uploads: never ship participant data inside the image.
+exports/
+temp/
+
+# Not needed to run the server.
+.git
+.github/
+tests/
+.gitignore
+present/
+migrations/
+*.md
+Dockerfile
+.dockerignore
+
+# Server deploy files: used by docker compose, not by the app inside the image.
+docker-compose.yml
+Caddyfile
+deploy.env

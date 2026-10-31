@@ -5,3 +5,8 @@ __pycache__/
 *.pyo
 *.pyd
 main.py
+exports/
+deploy.env
+
+# analysis outputs (made from participant data)
+analysis/out/

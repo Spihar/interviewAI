@@ -1,0 +1,163 @@
+# CI ("continuous integration"): GitHub checks the code on every push and pull request, on its own computers.
+# CD ("continuous deployment"): when a push to main passes both checks, the deploy job copies it to the server
+# and restarts the app. It does what you do by hand today (aws-from-zero.md step 7): tgz, scp, unpack, compose up.
+# The checks themselves need no secrets (placeholder keys, see tests/test_smoke.py). Only the deploy job uses
+# the repo secrets SERVER_HOST, SERVER_USER, SERVER_SSH_KEY, SERVER_KNOWN_HOSTS and the variable SITE_ADDRESS
+# (see ci-cd-explained.md for how to add them).
+
+name: CI
+
+on:
+  push:                     # every push, on any branch
+  pull_request:             # and every pull request
+  workflow_dispatch:        # plus a "Run workflow" button on the Actions tab (it runs the checks only, never deploys)
+
+# Read-only access to the repo is all these checks need.
+permissions:
+  contents: read
+
+# If you push twice quickly to a work branch, stop the older run and only check the newest commit.
+# On main nothing running is cancelled, so a deploy is never stopped halfway. GitHub keeps one waiting run:
+# if several pushes land during a deploy, only the newest waits and goes out next, which is what we want.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  # Job 1: does the Python code load, and do the tests pass?
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Get the code
+        uses: actions/checkout@v4
+
+      - name: Install Python 3.13.5 (same as the Dockerfile)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13.5"
+          cache: pip         # reuse downloaded packages between runs, so later runs are faster
+
+      - name: Install the app's packages, plus the test tools
+        run: pip install -r requirements.txt pytest==8.4.2 ruff==0.13.0
+
+      # Only the rules for real errors: syntax errors and names that don't exist (like a typo in a variable).
+      # Style rules are left out on purpose, so old code doesn't fail the check.
+      - name: Look for code errors (ruff)
+        run: ruff check --select E9,F63,F7,F82 --output-format github .
+
+      - name: Run the tests (pytest)
+        run: python -m pytest -v
+
+  # Job 2: does the Docker image still build, and does the container start and answer /health?
+  # This is the same image the AWS server runs, so a red cross here means a deploy would have failed.
+  docker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Get the code
+        uses: actions/checkout@v4
+
+      - name: Build the image
+        run: docker build -t interviewai-ci .
+
+      # The app reads its keys from a mounted .env (see the Dockerfile), so give it a fake one.
+      # The image runs as uid 10001, so that user must be able to read the file.
+      - name: Start the container with placeholder keys
+        run: |
+          printf '%s\n' \
+            'SUPABASE_URL=https://ci-placeholder.supabase.co' \
+            'SUPABASE_KEY=sb_secret_ci_placeholder' \
+            'GEMINI_API_KEY=ci-placeholder' \
+            'GROQ_API_KEY=ci-placeholder' \
+            'PARTICIPANT_SALT=ci-placeholder' > ci.env
+          chmod 644 ci.env
+          docker run -d --name app -p 8000:8000 -v "$PWD/ci.env:/app/.env:ro" interviewai-ci
+
+      - name: Wait for /health to answer
+        run: |
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8000/health; then echo; echo "Container is healthy."; exit 0; fi
+            sleep 2
+          done
+          echo "The container did not answer /health within 60 seconds. Its logs:"
+          docker logs app
+          exit 1
+
+      - name: Stop the container
+        if: always()
+        run: docker rm -f app || true
+
+  # Job 3: deploy. "needs" makes it wait for both checks and skip if either fails,
+  # and the "if" makes it run only for a push to main (never for other branches or pull requests).
+  deploy:
+    needs: [test, docker]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # Never run two deploys at once; a newer one waits for the older one to finish instead of cancelling it.
+    concurrency:
+      group: deploy
+      cancel-in-progress: false
+    # Secrets are handed to the steps as environment variables, never pasted into the script text,
+    # so a quote or $ in a secret can't change the commands.
+    env:
+      SERVER_HOST: ${{ secrets.SERVER_HOST }}
+      SERVER_USER: ${{ secrets.SERVER_USER }}
+    steps:
+      - name: Get the code
+        uses: actions/checkout@v4
+
+      # Same exclusions as the manual tgz: no .env, no local folders, no git history.
+      - name: Pack the code
+        run: |
+          tar --exclude='./.git' --exclude='./venv' --exclude='./exports' --exclude='./temp' \
+              --exclude='__pycache__' --exclude='./.env*' --exclude='./present' -czf /tmp/interviewai.tgz .
+
+      # known_hosts holds the server's real key, saved once by you (see the guide). ssh then refuses to connect
+      # if something else answers at that address, instead of trusting whatever key it is shown.
+      - name: Load the deploy key and the server's known key
+        env:
+          SSH_KEY: ${{ secrets.SERVER_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.SERVER_KNOWN_HOSTS }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy_key
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/deploy_key ~/.ssh/known_hosts
+
+      - name: Copy the code to the server
+        run: scp -i ~/.ssh/deploy_key /tmp/interviewai.tgz "$SERVER_USER@$SERVER_HOST:interviewai.tgz"     # no folder = the home folder
+
+      # Unpack into a fresh folder, then mirror it into ~/interviewai with rsync --delete, so files removed from
+      # the repo are removed on the server too. Excluded paths are never touched: .env (and backups like .env.bak),
+      # deploy.env and exports/. Anything else you keep ONLY on the server must be added to these excludes,
+      # or the next deploy deletes it. Caddy's certificate lives in a Docker volume, not in this folder, so it is safe.
+      # Last, `docker image prune -f` deletes the previous, now unused app image, so old images don't fill the disk.
+      - name: Unpack and restart
+        run: |
+          ssh -i ~/.ssh/deploy_key "$SERVER_USER@$SERVER_HOST" '
+            set -e
+            rm -rf ~/interviewai-new && mkdir ~/interviewai-new
+            tar -xzf ~/interviewai.tgz -C ~/interviewai-new
+            rsync -a --delete --exclude="/.env*" --exclude=/deploy.env --exclude=/exports/ ~/interviewai-new/ ~/interviewai/
+            rm -rf ~/interviewai-new
+            cd ~/interviewai
+            docker compose --env-file deploy.env up -d --build
+            docker compose --env-file deploy.env ps
+            docker image prune -f
+          '
+
+      # If this goes red, the new version is live but not answering. There is no automatic rollback:
+      # revert the commit on main and push, and this job deploys the previous version again.
+      - name: Check the live site answers
+        env:
+          SITE_ADDRESS: ${{ vars.SITE_ADDRESS }}
+        run: |
+          : "${SITE_ADDRESS:?Set the SITE_ADDRESS variable in Settings > Secrets and variables > Actions > Variables}"
+          for i in $(seq 1 30); do
+            if curl -fsS "https://$SITE_ADDRESS/health"; then echo; echo "Live site is healthy."; exit 0; fi
+            sleep 5
+          done
+          echo "The site did not answer /health within 150 seconds after the deploy."
+          exit 1
